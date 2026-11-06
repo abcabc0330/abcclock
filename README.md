@@ -42,11 +42,17 @@
 
 ## 构建
 
-依赖：Qt5（`qt5-base`）、C++17 编译器。
+依赖：Qt5 开发包 + libdbus-1 头文件（`dbus-1` 的 pkg-config）+ C++17 编译器。
+不需要额外链接 X11/XCB，也不需要 `xdotool`。
+
+| 发行版 | 依赖 |
+|---|---|
+| Arch | `qt5-base` `dbus` `pkgconf` `make` |
+| Debian/Ubuntu | `qtbase5-dev` `qt5-qmake` `libdbus-1-dev` `pkg-config` `build-essential` |
 
 ```bash
-qmake-qt5 abcclock.pro
-make -j$(nproc)
+qmake-qt5 abcclock.pro && make -j$(nproc)   # Arch
+qmake abcclock.pro && make -j$(nproc)       # Debian/Ubuntu（或 QT_SELECT=qt5 qmake）
 ```
 
 产物为 `abcclock`。运行：
@@ -57,26 +63,34 @@ make -j$(nproc)
 
 ### 窗口定位（X11 / XWayland）
 
-程序自身不依赖窗口管理器。以 override-redirect 方式定位（示例）：
+程序**自行定位**，不依赖窗口管理器或任何外部工具：
+
+- 窗口标志为 `FramelessWindowHint | WindowStaysOnTopHint | X11BypassWindowManagerHint`，
+  即 override-redirect，WM 不会接管，全屏终端也盖不住；
+- 启动时按 `POS_RIGHT_MARGIN`(20px) / `POS_TOP`(50px) 贴主屏右上角摆放
+  （1920 宽屏幕 → x=1700、右缘 1900）；
+- Wayland 会话下若未显式设置 `QT_QPA_PLATFORM` 且存在 `DISPLAY`（XWayland），
+  自动 `QT_QPA_PLATFORM=xcb`；无 XWayland 时保持原生 Wayland（此时无法自定位）。
+
+## 安装
+
+### Arch Linux
 
 ```bash
-abcclock 北京 &
-sleep 1
-WIN=$(xdotool search --class abcclock | head -1)
-xdotool set_window --overrideredirect 1 "$WIN"
-xdotool windowmove "$WIN" 1708 50
-```
-
-参考 `~/.local/bin/abcclock.sh`（本地启动脚本，含重试等待窗口的完整逻辑）。
-
-## 安装（Arch Linux）
-
-```bash
-# 本地构建安装
 make install DESTDIR=/tmp/abcclock-pkg   # 或直接 make && sudo make install
-
-# 或使用 AUR 包（见 packaging/PKGBUILD）
+# 或 AUR 包（packaging/PKGBUILD）
 ```
+
+### Debian / Ubuntu（deb 打包）
+
+```bash
+sudo apt build-dep .            # 或手动安装控制文件中 Build-Depends 各项
+dpkg-buildpackage -us -uc -b    # 产物在上一级目录：abcclock_1.5.0-1_amd64.deb
+sudo apt install ../abcclock_*.deb
+```
+
+运行时依赖自动生成（`libqt5widgets5`/`libqt5gui5`/`libqt5dbus5`/`libdbus-1-3` 等），
+另显式依赖 `curl`（天气查询）。
 
 ## 布局
 

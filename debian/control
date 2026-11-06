@@ -1,0 +1,23 @@
+Source: abcclock
+Section: utils
+Priority: optional
+Maintainer: ddfabc <liqiang0330@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               qtbase5-dev,
+               qt5-qmake,
+               qtchooser,
+               libdbus-1-dev,
+               pkg-config
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/abcabc0330/abcclock
+
+Package: abcclock
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, curl
+Description: Qt5 hover desktop clock
+ A frameless, always-on-top desktop clock overlay: analog dial, weekday,
+ date, three city timezones and three city weather lines.
+ It positions itself (override-redirect) at the top right of the screen,
+ runs on X11 and on XWayland in Wayland sessions, and provides a
+ StatusNotifierItem tray menu (show/hide, settings, run-at-login, quit).

@@ -12,6 +12,7 @@
 //   - 城市竖排：2 个汉字垂直排列（如"北京"）
 //   - 天气：wttr.in（城市名 + 天气 + 温度）
 #include <QApplication>
+#include <QScreen>
 #include <QWidget>
 #include <QPainter>
 #include <QTimer>
@@ -60,6 +61,8 @@ static const int WEATHER_H = 30;        // 每行天气高（需求4：3 行）
 static const int WEATHER_N = 3;         // 3 个城市天气
 static const int PAD_H     = 4;                     // 左右各留 4px 背景边（整体宽 +8）
 static const int WIN_W     = DIAL_SIZE + PAD_H * 2;  // 总宽 200 = 表盘宽 192 + 左右各 4
+static const int POS_RIGHT_MARGIN = 20;              // 默认距屏幕右缘
+static const int POS_TOP          = 50;              // 默认距屏幕顶
 static const int WIN_H     = DIAL_SIZE + WEEKDAY_H + DATE_H + TIME_H + WEATHER_H * WEATHER_N;
 static const int CORNER_R   = 12;       // 整窗圆角半径
 
@@ -125,8 +128,16 @@ public:
     {
         setFixedSize(WIN_W, WIN_H);
         // 无边框 + 置顶 + 背景透明（半透明灰色，不遮挡桌面）
-        setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+        // X11BypassWindowManagerHint => override-redirect：窗口不被 WM 管理，
+        // 因而可以自行定位、也不会被全屏终端盖住（X11/XWayland 下有效）
+        setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint
+                       | Qt::X11BypassWindowManagerHint);
         setAttribute(Qt::WA_TranslucentBackground);
+        // 自定位：默认贴屏幕右上（右缘 20px、顶部 50px），不再依赖外部 xdotool
+        if (QScreen* scr = QGuiApplication::primaryScreen()) {
+            const QRect g = scr->geometry();
+            move(g.right() + 1 - WIN_W - POS_RIGHT_MARGIN, g.top() + POS_TOP);
+        }
         // 每秒更新（秒针每秒动）
         QTimer* timer = new QTimer(this);
         connect(timer, &QTimer::timeout, this, [this]() { update(); });
@@ -773,6 +784,12 @@ static QString findTrayBus() {
 }
 
 int main(int argc, char* argv[]) {
+    // Wayland 会话：应用依赖 override-redirect 固定悬浮，需走 XWayland。
+    // 仅当用户没有显式指定平台、且确实有 XWayland（DISPLAY）时切换。
+    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")
+        && !qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY")
+        && !qEnvironmentVariableIsEmpty("DISPLAY"))
+        qputenv("QT_QPA_PLATFORM", "xcb");
     // 托盘总线自愈（必须在 QApplication 之前设置环境变量）
     const QString bus = findTrayBus();
     if (!bus.isEmpty() && bus != qEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"))

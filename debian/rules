@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	QT_SELECT=qt5 qmake abcclock.pro PREFIX=/usr
+
+override_dh_auto_clean:
+	$(RM) -r Makefile .qmake.stash main.o abcclock moc_predefs.h
+	dh_auto_clean
+
+override_dh_auto_install:
+	$(MAKE) install INSTALL_ROOT=$(CURDIR)/debian/abcclock
