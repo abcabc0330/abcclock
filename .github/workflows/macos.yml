@@ -1,0 +1,58 @@
+name: macOS dmg
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    # macos-latest 为 arm64；qmake 用 universal Qt，产物同时含 arm64 与 x86_64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6.12.0 (universal, from Qt online repo)
+        run: |
+          python3 -m pip install --user aqtinstall
+          python3 -m aqt install-qt mac desktop 6.12.0 clang_64 -O "$HOME/Qt"
+          "$HOME/Qt/6.12.0/macos/bin/qmake" -v
+
+      - name: Build universal app
+        run: |
+          QTDIR="$HOME/Qt/6.12.0/macos"
+          "$QTDIR/bin/qmake" abcclock.pro CONFIG+=release CONFIG+=sdk_no_version_check \
+              QMAKE_APPLE_DEVICE_ARCHS="arm64 x86_64"
+          make -j"$(sysctl -n hw.ncpu)"
+          lipo -info abcclock.app/Contents/MacOS/abcclock
+
+      - name: Bundle Qt and sign (ad-hoc)
+        run: |
+          "$HOME/Qt/6.12.0/macos/bin/macdeployqt" abcclock.app -always-overwrite
+          codesign --force --deep --sign - abcclock.app
+          codesign --verify --deep --strict abcclock.app
+
+      - name: Create dmg
+        run: |
+          mkdir -p dist
+          cp -R abcclock.app dist/
+          ln -s /Applications dist/Applications
+          hdiutil create -volname abcclock -srcfolder dist -ov -format UDZO abcclock-macos.dmg
+          ls -lh abcclock-macos.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: abcclock-macos-dmg
+          path: abcclock-macos.dmg
+
+      - name: Attach dmg to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
+            || gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes "abcclock ${GITHUB_REF_NAME}"
+          gh release upload "${GITHUB_REF_NAME}" abcclock-macos.dmg --clobber
