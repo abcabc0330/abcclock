@@ -1,10 +1,10 @@
-// abcclock：模拟表盘 + 星期 + 日期 + 三城市时区 + 天气（Qt5，196px 宽悬浮窗）
+// abcclock：模拟表盘 + 星期 + 日期 + 三城市时区 + 天气（Qt5，200px 宽悬浮窗）
 // 布局（从上到下）：
 //   1. tzclock 表盘（192x192，含 12 时点数字刻度，同心）
 //   2. 年-月-日（日期行，宽=表盘直径 192，大字体）
 //   3. 城市竖排（2 汉字）+ 时:分:秒（大字体，缩小间距）
 //   4. 底部 3 城市天气（庆阳/成都/佛山，各 1 行：城市名 + 天气 + 温度）
-// 总宽 196 = 内容宽(192，表盘/日期/时区/天气均按此排布) + 左右各 2px 背景边。
+// 总宽 200 = 内容宽(192，表盘/日期/时区/天气均按此排布) + 左右各 4px 背景边。
 //
 // 样式来源：
 //   - 表盘：tzclock（圆盘 #141414、刻度 #000000、时分秒指针 #6e6e6e）
@@ -58,8 +58,8 @@ static const int TZ_ROW_H  = 64;        // 每时区城市行高（时间字体�
 static const int TIME_H    = TZ_ROW_H * TZ_N;  // 时间区总高（3 城市时区）
 static const int WEATHER_H = 30;        // 每行天气高（需求4：3 行）
 static const int WEATHER_N = 3;         // 3 个城市天气
-static const int PAD_H     = 2;                     // 左右各留 2px 背景边（整体宽 +4）
-static const int WIN_W     = DIAL_SIZE + PAD_H * 2;  // 总宽 196 = 表盘宽 192 + 左右各 2
+static const int PAD_H     = 4;                     // 左右各留 4px 背景边（整体宽 +8）
+static const int WIN_W     = DIAL_SIZE + PAD_H * 2;  // 总宽 200 = 表盘宽 192 + 左右各 4
 static const int WIN_H     = DIAL_SIZE + WEEKDAY_H + DATE_H + TIME_H + WEATHER_H * WEATHER_N;
 static const int CORNER_R   = 12;       // 整窗圆角半径
 
