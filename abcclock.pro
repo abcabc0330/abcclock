@@ -1,4 +1,7 @@
-QT += core gui widgets
+QT += core gui widgets dbus
+
+CONFIG += link_pkgconfig
+PKGCONFIG += dbus-1
 
 TARGET = abcclock
 TEMPLATE = app

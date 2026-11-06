@@ -42,6 +42,11 @@
 #include <QComboBox>
 #include <QUrl>
 #include <QCursor>
+#include <QStandardPaths>
+#include <QDir>
+#include <QFile>
+#include <dbus/dbus.h>
+#include <unistd.h>
 
 // 尺寸（像素）
 static const int DIAL_SIZE = 192;       // 表盘直径（复刻 tzclock）
@@ -435,6 +440,9 @@ private:
         m_menu = new QMenu(this);
         m_toggleAct = m_menu->addAction(QString::fromUtf8("隐藏"));
         m_settingsAct = m_menu->addAction(QString::fromUtf8("设置…"));
+        m_autostartAct = m_menu->addAction(QString::fromUtf8("开机运行"));
+        m_autostartAct->setCheckable(true);
+        m_autostartAct->setChecked(isAutostartEnabled());
         m_exitAct = m_menu->addAction(QString::fromUtf8("退出"));
 
         m_tray = new QSystemTrayIcon(makeTrayIcon(true), this);
@@ -444,6 +452,9 @@ private:
         connect(m_toggleAct, &QAction::triggered, this, [this]() { toggleVisible(); });
         connect(m_settingsAct, &QAction::triggered, this, [this]() { openSettings(); });
         connect(m_exitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
+        connect(m_autostartAct, &QAction::triggered, this, [this](bool on) {
+            if (!setAutostartEnabled(on)) m_autostartAct->setChecked(!on);
+        });
         // 左键单击（Trigger）切换显示/隐藏；右键由 setContextMenu 弹出菜单
         connect(m_tray, &QSystemTrayIcon::activated, this,
                 [this](QSystemTrayIcon::ActivationReason r) {
@@ -452,6 +463,55 @@ private:
                         m_menu->popup(QCursor::pos());
                 });
         m_tray->show();
+    }
+
+    // ---- 开机自启（XDG autostart：~/.config/autostart/abcclock.desktop）----
+    static QString autostartPath() {
+        return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)
+               + QStringLiteral("/autostart/abcclock.desktop");
+    }
+
+    static bool isAutostartEnabled() { return QFile::exists(autostartPath()); }
+
+    QString autostartExecLine() const {
+        // 优先复用已安装的 .desktop 的 Exec（它可能带定位脚本、环境变量等）
+        QString cmd;
+        const QString desktop = QStandardPaths::locate(
+            QStandardPaths::ApplicationsLocation, QStringLiteral("abcclock.desktop"));
+        if (!desktop.isEmpty()) {
+            QSettings ds(desktop, QSettings::IniFormat);
+            cmd = ds.value(QStringLiteral("Desktop Entry/Exec")).toString().trimmed();
+        }
+        if (cmd.isEmpty()) {
+            cmd = QCoreApplication::applicationFilePath();
+            if (!m_city.isEmpty()) cmd += QLatin1Char(' ') + m_city;
+        }
+        if (cmd.contains(QLatin1Char(' '))) cmd = QLatin1Char('"') + cmd + QLatin1Char('"');
+        return cmd;
+    }
+
+    bool setAutostartEnabled(bool on) {
+        const QString path = autostartPath();
+        if (!on) return QFile::remove(path) || !QFile::exists(path);
+
+        QDir().mkpath(QFileInfo(path).absolutePath());
+        QFile f(path);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+        const QString content =
+            QStringLiteral(
+                "[Desktop Entry]\n"
+                "Type=Application\n"
+                "Name=abcclock\n"
+                "Comment=Hover desktop clock: dial, weekday, date, 3 timezones, weather\n"
+                "Exec=%1\n"
+                "Icon=clock\n"
+                "Terminal=false\n"
+                "X-GNOME-Autostart-enabled=true\n")
+                .arg(autostartExecLine());
+        const bool ok = f.write(content.toUtf8()) > 0;
+        f.close();
+        if (!ok) f.remove();
+        return ok;
     }
 
     void toggleVisible() {
@@ -635,10 +695,53 @@ private:
     QMenu* m_menu = nullptr;
     QAction* m_toggleAct = nullptr;
     QAction* m_settingsAct = nullptr;
+    QAction* m_autostartAct = nullptr;
     QAction* m_exitAct = nullptr;
 };
 
+// 选择带 StatusNotifierWatcher 的会话总线：自启（systemd-xdg-autostart 等）
+// 拿到的 DBUS_SESSION_BUS_ADDRESS 常是没有托盘宿主的系统总线。
+// 必须在 QApplication 之前执行——Qt 在构造 app 时就会连上会话总线。
+static bool busHasWatcher(const QString& addr) {
+    DBusError err;
+    dbus_error_init(&err);
+    DBusConnection* c = dbus_connection_open_private(addr.toUtf8().constData(), &err);
+    if (!c) {
+        dbus_error_free(&err);
+        return false;
+    }
+    bool has = false;
+    if (dbus_bus_register(c, &err))
+        has = dbus_bus_name_has_owner(c, "org.kde.StatusNotifierWatcher", &err);
+    dbus_error_free(&err);
+    dbus_connection_close(c);
+    dbus_connection_unref(c);
+    return has;
+}
+
+static QString findTrayBus() {
+    QStringList cands;
+    const QString cur = qEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS");
+    if (!cur.isEmpty()) cands << cur;
+    cands << QStringLiteral("env:unix:path=/run/user/%1/bus").arg(getuid());
+    for (const QFileInfo& fi : QDir(QStringLiteral("/tmp"))
+                                   .entryInfoList({QStringLiteral("dbus-*")},
+                                                  QDir::Files | QDir::System)) {
+        if (fi.ownerId() == getuid())
+            cands << QStringLiteral("env:unix:path=") + fi.absoluteFilePath();
+    }
+    for (QString addr : cands) {
+        addr.remove(QStringLiteral("env:"));
+        if (busHasWatcher(addr)) return addr;
+    }
+    return QString();
+}
+
 int main(int argc, char* argv[]) {
+    // 托盘总线自愈（必须在 QApplication 之前设置环境变量）
+    const QString bus = findTrayBus();
+    if (!bus.isEmpty() && bus != qEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"))
+        qputenv("DBUS_SESSION_BUS_ADDRESS", bus.toUtf8());
     QApplication app(argc, argv);
     // 城市名：命令行参数或默认"北京"
     QString city = argc > 1 ? QString::fromUtf8(argv[1]) : QString::fromUtf8("北京");

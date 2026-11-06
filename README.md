@@ -15,7 +15,12 @@
 - 窗口使用 `override_redirect`，全屏终端（如 ghostty）也不会遮住它
 - **系统托盘**（StatusNotifierItem）：
   - 左键单击图标：显示 / 隐藏窗口（图标隐藏时变暗）
-  - 右键菜单：`隐藏`（或 `显示`）/ `设置…` / `退出`
+  - 右键菜单：`隐藏`（或 `显示`）/ `设置…` / `开机运行`（复选框）/ `退出`
+- **开机运行**（右键菜单勾选项）：写入 / 删除
+  `~/.config/autostart/abcclock.desktop`；勾选状态以该文件是否存在为准，
+  重启后保留。若已安装 `abcclock.desktop`（`/usr/share/applications` 或
+  `~/.local/share/applications`），自启项沿用它的 `Exec`，从而带上本地启动
+  脚本里的窗口定位逻辑。
 - **设置面板**（右键菜单 → `设置…`）：
   - 背景不透明度（20–100%）
   - 四区域字号：星期行、日期行、时区时间、天气行
@@ -25,7 +30,10 @@
   - 全部写入 `~/.config/abcclock/abcclock.conf`，重启后保留
 
 > 托盘依赖桌面环境的 StatusNotifier 宿主（waybar 的 `tray` 模块、KDE/GNOME
-> 的托盘均可）。若托盘无图标，通常是应用与面板跑在了不同的 D-Bus 会话总线上。
+> 的托盘均可）。应用启动时会依次探测当前 `DBUS_SESSION_BUS_ADDRESS`、
+> `/run/user/$UID/bus` 以及 `/tmp/dbus-*`，选择带有
+> `org.kde.StatusNotifierWatcher` 的那条总线（自启场景常遇到系统总线没有托盘
+> 宿主），探测在 `QApplication` 创建前完成。
 
 ## 构建
 
