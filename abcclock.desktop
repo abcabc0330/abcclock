@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=abcclock
+Comment=Hover desktop clock: dial, weekday, date, 3 timezones, weather (Qt5)
+Exec=abcclock
+Icon=clock
+Terminal=false
+Type=Application
+Categories=Utility;

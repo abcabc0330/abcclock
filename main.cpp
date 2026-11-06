@@ -1,0 +1,391 @@
+// abcclock：模拟表盘 + 星期 + 日期 + 三城市时区 + 天气（Qt5，192px 宽悬浮窗）
+// 布局（从上到下）：
+//   1. tzclock 表盘（192x192，含 12 时点数字刻度，同心）
+//   2. 年-月-日（日期行，宽=表盘直径 192，大字体）
+//   3. 城市竖排（2 汉字）+ 时:分:秒（大字体，缩小间距）
+//   4. 底部 3 城市天气（庆阳/成都/佛山，各 1 行：城市名 + 天气 + 温度）
+// 总宽 = 表盘宽(192) + 城市竖排宽(40)，宽度对齐。
+//
+// 样式来源：
+//   - 表盘：tzclock（圆盘 #141414、刻度 #000000、时分秒指针 #6e6e6e）
+//   - 时间：hoverclockqt（白色文字）
+//   - 城市竖排：2 个汉字垂直排列（如"北京"）
+//   - 天气：wttr.in（城市名 + 天气 + 温度）
+#include <QApplication>
+#include <QWidget>
+#include <QPainter>
+#include <QTimer>
+#include <QDateTime>
+#include <QTime>
+#include <QFont>
+#include <QFontMetrics>
+#include <QString>
+#include <QProcess>
+#include <QtMath>
+#include <QRegularExpression>
+#include <QTimeZone>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+
+// 尺寸（像素）
+static const int DIAL_SIZE = 192;       // 表盘直径（复刻 tzclock）
+static const int CITY_W    = 32;        // 城市竖排宽度（2汉字）
+static const int WEEKDAY_H = 28;       // 星期行高（表盘与日期之间：SUN 星期五）
+static const int DATE_H    = 52;        // 年-月-日行高（需求1增大，容纳大字号）
+static const int TZ_N      = 3;         // 时区城市数（北京/纽约/洛杉矶）
+static const int TZ_ROW_H  = 64;        // 每时区城市行高（时间字体更大）
+static const int TIME_H    = TZ_ROW_H * TZ_N;  // 时间区总高（3 城市时区）
+static const int WEATHER_H = 30;        // 每行天气高（需求4：3 行）
+static const int WEATHER_N = 3;         // 3 个城市天气
+static const int WIN_W     = DIAL_SIZE;              // 总宽 = 表盘宽（时间行=城市+时间=192）
+static const int WIN_H     = DIAL_SIZE + WEEKDAY_H + DATE_H + TIME_H + WEATHER_H * WEATHER_N;
+static const int CORNER_R   = 12;       // 整窗圆角半径
+
+// 颜色（复刻 tzclock 实测样式色）
+static const QColor DIAL_BG   (0x14, 0x14, 0x14);  // 表盘背景 #141414
+static const QColor DIAL_RING (0x00, 0x00, 0x00);  // 刻度 #000000
+static const QColor HAND_COL  (0x6e, 0x6e, 0x6e);  // 指针 #6e6e6e
+static const QColor SEC_COL   (0x8a, 0x8a, 0x8a);  // 秒针
+static const QColor TEXT_COL  (0xff, 0xff, 0xff);  // 文字白色（hoverclockqt 样式）
+static const QColor NUM_COL   (0x9a, 0x9a, 0x9a);  // 时点数字
+static const QColor MUTED_COL (0x8a, 0x8a, 0x8a);  // 天气文字灰色
+
+// 底部天气城市：拼音名（wttr.in 查询）+ 显示中文名
+struct WeatherCity {
+    const char* pinyin;  // wttr.in 查询名
+    const char* name;    // 显示中文名
+};
+static const WeatherCity kCities[WEATHER_N] = {
+    {"Qingyang", "庆阳"},
+    {"Chengdu",  "成都"},
+    {"Foshan",   "佛山"},
+};
+
+// 时区城市：名字 + IANA 时区
+struct TzCity {
+    const char* name;   // 显示中文名
+    const char* tz;     // IANA 时区
+};
+static const TzCity kTzCities[TZ_N] = {
+    {"北京",   "Asia/Shanghai"},
+    {"纽约",   "America/New_York"},
+    {"洛杉矶", "America/Los_Angeles"},
+};
+
+class HoverTzClock : public QWidget {
+public:
+    explicit HoverTzClock(const QString& city, QWidget* parent = nullptr)
+        : QWidget(parent), m_city(city)
+    {
+        setFixedSize(WIN_W, WIN_H);
+        // 无边框 + 置顶 + 背景透明（半透明灰色，不遮挡桌面）
+        setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+        setAttribute(Qt::WA_TranslucentBackground);
+        // 每秒更新（秒针每秒动）
+        QTimer* timer = new QTimer(this);
+        connect(timer, &QTimer::timeout, this, [this]() { update(); });
+        timer->start(1000);
+        // 天气：启动时 + 每 10 分钟刷新
+        fetchWeather();
+        QTimer* wtimer = new QTimer(this);
+        connect(wtimer, &QTimer::timeout, this, [this]() { fetchWeather(); });
+        wtimer->start(10 * 60 * 1000);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        // 背景半透明灰色 + 整体圆角（rgba(20,20,20,150)，四角透明）
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(20, 20, 20, 150));
+        p.drawRoundedRect(QRectF(rect()), CORNER_R, CORNER_R);
+        QDateTime now = QDateTime::currentDateTime();
+        QTime t = now.time();
+
+        // ---- 上方：tzclock 表盘（192x192，居左，同心）----
+        drawDial(&p, 0, 0, DIAL_SIZE, t);
+
+        // ---- 表盘与日期之间：星期行（SUN 星期五）----
+        drawWeekday(&p, 0, DIAL_SIZE, DIAL_SIZE, WEEKDAY_H, now);
+
+        // ---- 中部：年-月-日（宽=表盘直径，大字体）----
+        drawDate(&p, 0, DIAL_SIZE + WEEKDAY_H, DIAL_SIZE, DATE_H, now);
+
+        // ---- 下方：3 城市时区（北京/纽约/洛杉矶），各城市横排 + 该时区时间 ----
+        int timeY = DIAL_SIZE + WEEKDAY_H + DATE_H;
+        for (int i = 0; i < TZ_N; ++i) {
+            int ry = timeY + i * TZ_ROW_H;
+            // 该城市时区当前时间
+            QTimeZone tz(QByteArray(kTzCities[i].tz));
+            QDateTime local = tz.isValid() ? now.toTimeZone(tz) : now;
+            drawCity(&p, 0, ry, CITY_W, TZ_ROW_H, QString::fromUtf8(kTzCities[i].name));
+            drawTime(&p, CITY_W, ry, WIN_W - CITY_W, TZ_ROW_H, local);
+        }
+
+        // ---- 底部：3 城市天气 ----
+        int wy = timeY + TIME_H;
+        for (int i = 0; i < WEATHER_N; ++i) {
+            drawWeather(&p, 0, wy + i * WEATHER_H, WIN_W, WEATHER_H, i);
+        }
+    }
+
+private:
+    // 表盘：圆盘 + 12 时点数字刻度 + 时分秒指针（复刻 tzclock getHandPositions 角度公式）
+    void drawDial(QPainter* p, int x, int y, int size, const QTime& t) {
+        int cx = x + size / 2, cy = y + size / 2;
+        int r = size / 2;
+
+        // 表盘背景圆
+        p->setPen(Qt::NoPen);
+        p->setBrush(DIAL_BG);
+        p->drawEllipse(cx - r, cy - r, size, size);
+        // 外圈
+        p->setPen(QPen(DIAL_RING, 2));
+        p->setBrush(Qt::NoBrush);
+        p->drawEllipse(cx - r + 1, cy - r + 1, size - 2, size - 2);
+
+        // 12 个时点刻度（短线）
+        p->setPen(QPen(DIAL_RING, 2));
+        for (int i = 0; i < 12; ++i) {
+            double ang = qDegreesToRadians(i * 30.0);
+            int x1 = cx + (int)((r - 12) * std::sin(ang));
+            int y1 = cy - (int)((r - 12) * std::cos(ang));
+            int x2 = cx + (int)((r - 5) * std::sin(ang));
+            int y2 = cy - (int)((r - 5) * std::cos(ang));
+            p->drawLine(x1, y1, x2, y2);
+        }
+
+        // 12 个时点数字（1-12，在刻度内侧，精确居中 = 同心）
+        p->setPen(NUM_COL);
+        QFont nf = p->font();
+        nf.setPointSize(9);
+        nf.setBold(true);
+        p->setFont(nf);
+        QFontMetrics fm(nf);
+        for (int i = 1; i <= 12; ++i) {
+            double ang = qDegreesToRadians(i * 30.0);
+            // 数字中心位置（在 r-24 半径处）
+            int dnx = cx + (int)((r - 24) * std::sin(ang));
+            int dny = cy - (int)((r - 24) * std::cos(ang));
+            // 用字体度量精确居中（左上角 = 中心 - 半宽/半高）
+            QString num = QString::number(i);
+            int tx = dnx - fm.horizontalAdvance(num) / 2;
+            int ty = dny - fm.height() / 2 + fm.ascent();
+            p->drawText(tx, ty, num);
+        }
+
+        // 指针角度（tzclock 公式：单位 0-1200，x0.3=角度）
+        double secAng = (t.second() * 20) * 0.3;
+        double minAng = (t.minute() * 20 + t.second() / 3) * 0.3;
+        double hourAng = (t.hour() * 100 + (t.minute() * 60 + t.second()) / 36) * 0.3;
+
+        // 时针（短粗）
+        drawHand(p, cx, cy, hourAng, r * 0.55, 5, HAND_COL);
+        // 分针（中长中粗）
+        drawHand(p, cx, cy, minAng, r * 0.75, 3, HAND_COL);
+        // 秒针（细长）
+        drawHand(p, cx, cy, secAng, r * 0.85, 1, SEC_COL);
+        // 中心点
+        p->setPen(Qt::NoPen);
+        p->setBrush(HAND_COL);
+        p->drawEllipse(cx - 3, cy - 3, 6, 6);
+    }
+
+    void drawHand(QPainter* p, int cx, int cy, double angleDeg, int len, int width, const QColor& col) {
+        double rad = qDegreesToRadians(angleDeg);
+        int ex = cx + (int)(len * std::sin(rad));
+        int ey = cy - (int)(len * std::cos(rad));
+        p->setPen(QPen(col, width));
+        p->drawLine(cx, cy, ex, ey);
+    }
+
+    // 年-月-日（日期行，宽=表盘直径 192，大字体——字号自动增大到填满表盘宽）
+    // 星期行：SUN 星期五（英文缩写大写 + 中文星期）
+    void drawWeekday(QPainter* p, int x, int y, int w, int h, const QDateTime& now) {
+        QDate d = now.date();
+        QString en = QLocale(QLocale::English, QLocale::UnitedStates)
+                         .toString(d, "ddd").toUpper();
+        static const char* kZh[7] = {
+            "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"
+        };
+        QString zh = QString::fromUtf8(kZh[d.dayOfWeek() - 1]);
+        QFont f = p->font();
+        f.setPointSize(14);
+        f.setBold(true);
+        p->setFont(f);
+        p->setPen(TEXT_COL);
+        p->drawText(QRect(x, y, w, h), Qt::AlignCenter, en + "  " + zh);
+    }
+
+    void drawDate(QPainter* p, int x, int y, int w, int h, const QDateTime& now) {
+        p->setPen(TEXT_COL);
+        QString dateStr = now.toString("yyyy-MM-dd");
+        // 自动增大字号直到文字宽≈表盘宽(192)，填满宽度
+        QFont f = p->font();
+        f.setBold(true);
+        for (int pt = 10; pt <= 40; ++pt) {
+            f.setPointSize(pt);
+            QFontMetrics fm(f);
+            if (fm.horizontalAdvance(dateStr) >= w - 4) {
+                break;
+            }
+        }
+        p->setFont(f);
+        p->drawText(QRect(x, y, w, h), Qt::AlignCenter, dateStr);
+    }
+
+    // 城市名横排：只显示前 2 字（3 字城市只保留前 2 字）
+    void drawCity(QPainter* p, int x, int y, int w, int h, const QString& city) {
+        p->setPen(TEXT_COL);
+        QFont f = p->font();
+        f.setPointSize(11);
+        f.setBold(true);
+        p->setFont(f);
+        // 横排，只显示前 2 字（洛杉矶→洛杉）
+        p->drawText(QRect(x, y, w, h), Qt::AlignCenter, city.left(2));
+    }
+
+    // 时间：时:分:秒（大字体，自动增大填满时间区宽）
+    void drawTime(QPainter* p, int x, int y, int w, int h, const QDateTime& now) {
+        p->setPen(TEXT_COL);
+        QString timeStr = now.toString("hh:mm:ss");
+        // 自动增大字号直到填满宽（但不超过行高，避免溢出）
+        QFont f = p->font();
+        f.setBold(true);
+        int maxPt = 24;  // 初始 24pt，受行高 56 限制约 38pt
+        for (int pt = 16; pt <= 40; ++pt) {
+            f.setPointSize(pt);
+            QFontMetrics fm(f);
+            if (fm.height() > h - 6 || fm.horizontalAdvance(timeStr) >= w - 2) {
+                break;
+            }
+            maxPt = pt;
+        }
+        f.setPointSize(maxPt);
+        p->setFont(f);
+        p->drawText(QRect(x, y, w, h), Qt::AlignCenter, timeStr);
+    }
+
+    // 底部城市天气：城市名(左) + 天气情况(4字宽) + 温度区间(右) = 表盘宽 192
+    void drawWeather(QPainter* p, int x, int y, int w, int h, int idx) {
+        // 城市名（左，横排小字）
+        p->setPen(TEXT_COL);
+        QFont cf = p->font();
+        cf.setPointSize(11);
+        cf.setBold(true);
+        p->setFont(cf);
+        p->drawText(QRect(x, y, CITY_W, h), Qt::AlignCenter, QString::fromUtf8(kCities[idx].name));
+
+        // 拆分 "天气描述 最低~最高°C"（天气描述无空格，故按第一个空格拆）
+        QString wStr = m_weather[idx].isEmpty() ? "…" : m_weather[idx];
+        QString desc, temp;
+        int sp = wStr.indexOf(' ');
+        if (sp > 0) {
+            desc = wStr.left(sp);
+            temp = wStr.mid(sp + 1).trimmed();
+        } else {
+            desc = wStr;
+        }
+
+        // 天气情况：固定 4 字宽区域，居中
+        QFont wf = p->font();
+        wf.setPointSize(13);
+        wf.setBold(false);
+        p->setFont(wf);
+        QFontMetrics wm(wf);
+        int descW = wm.horizontalAdvance(QString::fromUtf8("国")) * 4;
+        int wx = x + CITY_W;
+        int tw = wm.horizontalAdvance(desc);
+        p->drawText(QRect(wx + (descW - tw) / 2, y, tw, h),
+                    Qt::AlignVCenter | Qt::AlignLeft, desc);
+
+        // 温度区间：剩余宽度右对齐（清晰大字号）
+        if (!temp.isEmpty()) {
+            QFont tf = wf;
+            tf.setPointSize(14);
+            p->setFont(tf);
+            p->drawText(QRect(wx + descW, y, w - CITY_W - descW, h),
+                        Qt::AlignVCenter | Qt::AlignRight, temp);
+        }
+    }
+
+    // 英文天气 → 中文翻译（wttr.in weatherDesc 常见值）
+    static QString translateWeather(const QString& en) {
+        static const QMap<QString, QString> m = {
+            {"Sunny", "晴"}, {"Clear", "晴"}, {"Partly cloudy", "多云"},
+            {"Cloudy", "多云"}, {"Overcast", "阴"}, {"Mist", "雾"},
+            {"Fog", "雾"}, {"Patchy rain nearby", "小雨"},
+            {"Patchy rain possible", "小雨"}, {"Light rain", "小雨"},
+            {"Light drizzle", "毛毛雨"}, {"Moderate rain", "中雨"},
+            {"Heavy rain", "大雨"}, {"Light rain shower", "小阵雨"},
+            {"Moderate rain at times", "中雨"}, {"Heavy rain at times", "大雨"},
+            {"Light snow", "小雪"}, {"Moderate snow", "中雪"},
+            {"Heavy snow", "大雪"}, {"Blizzard", "暴雪"},
+            {"Thundery outbreaks possible", "雷阵雨"},
+            {"Thunderstorm", "雷暴"}, {"Smoky haze", "雾霾"},
+            {"Smoke", "烟霾"}, {"Haze", "霾"}, {"Dust", "沙尘"},
+            {"Patchy snow possible", "小雪"}, {"Freezing fog", "冻雾"},
+            {"Light freezing rain", "冻雨"},
+        };
+        // 精确匹配 + 前缀匹配（去掉尾部空格）
+        QString e = en.trimmed();
+        if (m.contains(e)) return m[e];
+        // 尝试前缀匹配（如 "Patchy rain nearby" 已精确，其他含空格）
+        for (auto it = m.begin(); it != m.end(); ++it) {
+            if (e.startsWith(it.key())) return it.value();
+        }
+        return e;  // 未匹配：原样显示
+    }
+
+    // 获取天气（wttr.in j1：中文天气 + 温度区间 min~max°C）
+    void fetchWeather() {
+        for (int i = 0; i < WEATHER_N; ++i) {
+            QString q = QString::fromUtf8(kCities[i].pinyin);
+            QProcess* proc = new QProcess(this);
+            connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                    this, [this, proc, i](int, QProcess::ExitStatus) {
+                QString out = QString::fromUtf8(proc->readAllStandardOutput()).trimmed();
+                if (!out.isEmpty()) {
+                    // j1 JSON: weather[0].maxtempC/mintempC + current_condition[0].weatherDesc
+                    QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
+                    QJsonObject root = doc.object();
+                    QJsonArray weather = root.value("weather").toArray();
+                    if (!weather.isEmpty()) {
+                        QJsonObject today = weather.at(0).toObject();
+                        QString maxT = today.value("maxtempC").toString();
+                        QString minT = today.value("mintempC").toString();
+                        // 天气描述（英文→中文）
+                        QString descEn;
+                        QJsonArray cur = root.value("current_condition").toArray();
+                        if (!cur.isEmpty()) {
+                            QJsonArray desc = cur.at(0).toObject().value("weatherDesc").toArray();
+                            if (!desc.isEmpty()) descEn = desc.at(0).toObject().value("value").toString();
+                        }
+                        QString descZh = translateWeather(descEn);
+                        // "中文天气 最低~最高°C"
+                        m_weather[i] = descZh + " " + minT + "~" + maxT + "°C";
+                        update();
+                    }
+                }
+                proc->deleteLater();
+            });
+            QStringList args;
+            args << "-s" << "--max-time" << "10" << "https://wttr.in/" + q + "?format=j1";
+            proc->start("curl", args);
+        }
+    }
+
+    QString m_city;
+    QString m_weather[WEATHER_N];
+};
+
+int main(int argc, char* argv[]) {
+    QApplication app(argc, argv);
+    // 城市名：命令行参数或默认"北京"
+    QString city = argc > 1 ? QString::fromUtf8(argv[1]) : QString::fromUtf8("北京");
+    HoverTzClock clock(city);
+    clock.show();
+    return app.exec();
+}

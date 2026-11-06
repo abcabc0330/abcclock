@@ -1,0 +1,11 @@
+# 构建产物
+Makefile
+*.o
+*.moc
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+.qmake.stash
+abcclock
+abcclock.desktop.bak
+build/
