@@ -46,8 +46,14 @@
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include "platform.h"
+#if defined(Q_OS_LINUX)
 #include <dbus/dbus.h>
 #include <unistd.h>
+#elif defined(Q_OS_MACOS)
+#include <unistd.h>
+#endif
 
 // 尺寸（像素）
 static const int DIAL_SIZE = 192;       // 表盘直径（复刻 tzclock）
@@ -128,16 +134,18 @@ public:
     {
         setFixedSize(WIN_W, WIN_H);
         // 无边框 + 置顶 + 背景透明（半透明灰色，不遮挡桌面）
-        // X11BypassWindowManagerHint => override-redirect：窗口不被 WM 管理，
-        // 因而可以自行定位、也不会被全屏终端盖住（X11/XWayland 下有效）
+#if defined(Q_OS_MACOS)
+        // macOS：Tool 窗口不进 Dock、不抢前台；层级由 platformSetupWindow 提到 floating
+        setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
+#else
+        // X11：X11BypassWindowManagerHint => override-redirect，窗口不被 WM 管理，
+        // 因而可以自行定位、也不会被全屏终端盖住
         setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint
                        | Qt::X11BypassWindowManagerHint);
+#endif
         setAttribute(Qt::WA_TranslucentBackground);
         // 自定位：默认贴屏幕右上（右缘 20px、顶部 50px），不再依赖外部 xdotool
-        if (QScreen* scr = QGuiApplication::primaryScreen()) {
-            const QRect g = scr->geometry();
-            move(g.right() + 1 - WIN_W - POS_RIGHT_MARGIN, g.top() + POS_TOP);
-        }
+        placeAtDefaultPosition();
         // 每秒更新（秒针每秒动）
         QTimer* timer = new QTimer(this);
         connect(timer, &QTimer::timeout, this, [this]() { update(); });
@@ -154,6 +162,20 @@ public:
     }
 
 protected:
+    void showEvent(QShowEvent* e) override {
+        QWidget::showEvent(e);
+        platformSetupWindow(this);
+#if defined(Q_OS_MACOS)
+        // macOS 首次 show 时系统会按菜单栏把窗口上移；层级设置完再定位一次才是最终位置
+        if (!m_macPlaced) {
+            m_macPlaced = true;
+            // 首次 show 期间 AppKit 会把窗口吸到菜单栏下（y 变成 30）；
+            // 延到下一轮事件循环定位才是最终位置
+            QTimer::singleShot(0, this, [this]() { placeAtDefaultPosition(); });
+        }
+#endif
+    }
+
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
@@ -199,6 +221,14 @@ protected:
     }
 
 private:
+    // 贴屏幕右上：右缘留 POS_RIGHT_MARGIN、顶部留 POS_TOP
+    void placeAtDefaultPosition() {
+        if (QScreen* scr = QGuiApplication::primaryScreen()) {
+            const QRect g = scr->geometry();
+            move(g.right() + 1 - WIN_W - POS_RIGHT_MARGIN, g.top() + POS_TOP);
+        }
+    }
+
     // 表盘：圆盘 + 12 时点数字刻度 + 时分秒指针（复刻 tzclock getHandPositions 角度公式）
     void drawDial(QPainter* p, int x, int y, int size, const QTime& t) {
         int cx = x + size / 2, cy = y + size / 2;
@@ -493,7 +523,58 @@ private:
         m_tray->show();
     }
 
-    // ---- 开机自启（XDG autostart：~/.config/autostart/abcclock.desktop）----
+    // ---- 开机自启 ----
+#if defined(Q_OS_MACOS)
+    // macOS：~/Library/LaunchAgents/com.abcabc0330.abcclock.plist（RunAtLoad）
+    // 状态同样以文件系统为准，外部增删可即时反映
+    static QString autostartPath() {
+        return QDir::homePath()
+               + QStringLiteral("/Library/LaunchAgents/com.abcabc0330.abcclock.plist");
+    }
+
+    static bool isAutostartEnabled() { return QFile::exists(autostartPath()); }
+
+    bool setAutostartEnabled(bool on) {
+        const QString path = autostartPath();
+        const QString label = QStringLiteral("com.abcabc0330.abcclock");
+        const QString domain = QStringLiteral("gui/%1").arg(getuid());
+        QProcess lc;
+
+        if (!on) {
+            lc.start(QStringLiteral("launchctl"),
+                     {QStringLiteral("bootout"), domain + QLatin1Char('/') + label});
+            lc.waitForFinished(3000);
+            return QFile::remove(path) || !QFile::exists(path);
+        }
+
+        QDir().mkpath(QFileInfo(path).absolutePath());
+        QFile f(path);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+        QStringList args{QCoreApplication::applicationFilePath()};
+        if (!m_city.isEmpty()) args << m_city;
+        QString arr;
+        for (const QString& a : args)
+            arr += QStringLiteral("    <string>%1</string>\n").arg(a.toHtmlEscaped());
+        const QString content = QStringLiteral(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+            "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+            "<plist version=\"1.0\">\n<dict>\n"
+            "  <key>Label</key><string>%1</string>\n"
+            "  <key>ProgramArguments</key>\n  <array>\n%2  </array>\n"
+            "  <key>RunAtLoad</key><true/>\n"
+            "  <key>ProcessType</key><string>Interactive</string>\n"
+            "</dict>\n</plist>\n").arg(label, arr);
+        const bool ok = f.write(content.toUtf8()) > 0;
+        f.close();
+        if (!ok) { f.remove(); return false; }
+
+        lc.start(QStringLiteral("launchctl"), {QStringLiteral("bootstrap"), domain, path});
+        lc.waitForFinished(3000);
+        return true;
+    }
+#else
+    // Linux：XDG autostart（~/.config/autostart/abcclock.desktop）
     static QString autostartPath() {
         return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)
                + QStringLiteral("/autostart/abcclock.desktop");
@@ -541,6 +622,7 @@ private:
         if (!ok) f.remove();
         return ok;
     }
+#endif
 
     void toggleVisible() {
         if (isVisible()) hide();
@@ -743,11 +825,15 @@ private:
     QAction* m_settingsAct = nullptr;
     QAction* m_autostartAct = nullptr;
     QAction* m_exitAct = nullptr;
+#if defined(Q_OS_MACOS)
+    bool m_macPlaced = false;   // macOS 首次显示后重新定位（首次 show 会被系统微调）
+#endif
 };
 
 // 选择带 StatusNotifierWatcher 的会话总线：自启（systemd-xdg-autostart 等）
 // 拿到的 DBUS_SESSION_BUS_ADDRESS 常是没有托盘宿主的系统总线。
 // 必须在 QApplication 之前执行——Qt 在构造 app 时就会连上会话总线。
+#if defined(Q_OS_LINUX)
 static bool busHasWatcher(const QString& addr) {
     DBusError err;
     dbus_error_init(&err);
@@ -782,8 +868,10 @@ static QString findTrayBus() {
     }
     return QString();
 }
+#endif
 
 int main(int argc, char* argv[]) {
+#if defined(Q_OS_LINUX)
     // Wayland 会话：应用依赖 override-redirect 固定悬浮，需走 XWayland。
     // 仅当用户没有显式指定平台、且确实有 XWayland（DISPLAY）时切换。
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")
@@ -794,7 +882,12 @@ int main(int argc, char* argv[]) {
     const QString bus = findTrayBus();
     if (!bus.isEmpty() && bus != qEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"))
         qputenv("DBUS_SESSION_BUS_ADDRESS", bus.toUtf8());
+#endif
     QApplication app(argc, argv);
+#if defined(Q_OS_MACOS)
+    // 菜单栏常驻应用：不占 Dock、不抢前台（打包后 Info.plist 的 LSUIElement 亦生效）
+    app.setQuitOnLastWindowClosed(false);
+#endif
     // 城市名：命令行参数或默认"北京"
     QString city = argc > 1 ? QString::fromUtf8(argv[1]) : QString::fromUtf8("北京");
     HoverTzClock clock(city);

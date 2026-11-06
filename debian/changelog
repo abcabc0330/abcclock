@@ -1,3 +1,13 @@
+abcclock (2.0.0-1) unstable; urgency=medium
+
+  * 新增 macOS 版：Qt6 + Cocoa 悬浮窗口（NSFloatingWindowLevel、跨 Space）、
+    LaunchAgent 自启动、.app/dmg 打包（universal arm64 + x86_64，ad-hoc 签名）。
+  * 平台差异抽到 platform.h / platform_linux.cpp / platform_mac.mm；
+    Linux 专用 D-Bus 托盘探测改为条件编译。
+  * Linux 行为不变：窗口 200x554、override-redirect、XDG autostart。
+
+ -- ddfabc <liqiang0330@gmail.com>  Fri, 06 Nov 2026 22:10:00 -0700
+
 abcclock (1.5.1-1) unstable; urgency=medium
 
   * debian/rules: 用 make distclean 清理 qmake 产物（覆盖 moc_*/Makefile 等）。

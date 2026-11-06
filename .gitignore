@@ -15,3 +15,8 @@ src/
 pkg/
 *.pkg.tar.zst
 *.tar.gz
+
+# macOS 产物
+*.app
+dist/
+*.dmg

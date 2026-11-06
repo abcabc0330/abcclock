@@ -72,6 +72,27 @@ qmake abcclock.pro && make -j$(nproc)       # Debian/Ubuntu（或 QT_SELECT=qt5 
 - Wayland 会话下若未显式设置 `QT_QPA_PLATFORM` 且存在 `DISPLAY`（XWayland），
   自动 `QT_QPA_PLATFORM=xcb`；无 XWayland 时保持原生 Wayland（此时无法自定位）。
 
+## macOS（Apple Silicon / Intel）
+
+同一份源码，Qt6 分支：窗口用 `Tool` + `NSFloatingWindowLevel`（不进 Dock、跨 Space 悬浮），
+自启动改用 `~/Library/LaunchAgents/com.abcabc0330.abcclock.plist`（菜单里的「开机运行」会自动写/删它），
+Linux 专用的 D-Bus 托盘探测在 macOS 编译时整段剔除。
+
+```bash
+# 依赖：Xcode Command Line Tools + Qt 6.12（aqtinstall 装到 ~/Qt，免 sudo）
+python3 -m pip install --user aqtinstall
+python3 -m aqt install-qt mac desktop 6.12.0 clang_64 -O "$HOME/Qt"
+
+QTDIR=~/Qt/6.12.0/macos ./packaging/macos/build-dmg.sh   # 产出 abcclock-macos.dmg
+```
+
+dmg 内含 `abcclock.app` 与 `/Applications` 快捷方式，拖进去即可。构建为 ad-hoc 签名，
+**自用**直接打开；若从网上下载时被 Gatekeeper 拦，执行
+`xattr -d com.apple.quarantine /Applications/abcclock.app` 或右键「打开」。
+
+CI：`.github/workflows/macos.yml` 在 `macos-latest` 上用 universal Qt 构建
+`arm64 + x86_64` 双架构 app，打 tag 时自动附加 dmg 到 GitHub Release。
+
 ## 安装
 
 ### Arch Linux
