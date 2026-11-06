@@ -17,8 +17,10 @@ jobs:
 
       - name: Install Qt 6.12.0 (universal, from Qt online repo)
         run: |
-          python3 -m pip install --user aqtinstall
-          python3 -m aqt install-qt mac desktop 6.12.0 clang_64 -O "$HOME/Qt"
+          # runner 的 python3 来自 Homebrew，受 PEP 668 限制，用 venv 隔离
+          python3 -m venv "$RUNNER_TEMP/aqt"
+          "$RUNNER_TEMP/aqt/bin/pip" install --quiet aqtinstall
+          "$RUNNER_TEMP/aqt/bin/aqt" install-qt mac desktop 6.12.0 clang_64 -O "$HOME/Qt"
           "$HOME/Qt/6.12.0/macos/bin/qmake" -v
 
       - name: Build universal app
