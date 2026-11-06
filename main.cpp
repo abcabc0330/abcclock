@@ -27,6 +27,19 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QSystemTrayIcon>
+#include <QMenu>
+#include <QAction>
+#include <QIcon>
+#include <QPixmap>
+#include <QSettings>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QSlider>
+#include <QLineEdit>
+#include <QUrl>
+#include <QCursor>
 
 // 尺寸（像素）
 static const int DIAL_SIZE = 192;       // 表盘直径（复刻 tzclock）
@@ -52,16 +65,6 @@ static const QColor NUM_COL   (0x9a, 0x9a, 0x9a);  // 时点数字
 static const QColor MUTED_COL (0x8a, 0x8a, 0x8a);  // 天气文字灰色
 
 // 底部天气城市：拼音名（wttr.in 查询）+ 显示中文名
-struct WeatherCity {
-    const char* pinyin;  // wttr.in 查询名
-    const char* name;    // 显示中文名
-};
-static const WeatherCity kCities[WEATHER_N] = {
-    {"Qingyang", "庆阳"},
-    {"Chengdu",  "成都"},
-    {"Foshan",   "佛山"},
-};
-
 // 时区城市：名字 + IANA 时区
 struct TzCity {
     const char* name;   // 显示中文名
@@ -86,6 +89,10 @@ public:
         QTimer* timer = new QTimer(this);
         connect(timer, &QTimer::timeout, this, [this]() { update(); });
         timer->start(1000);
+        // 持久化设置（背景不透明度 + 天气城市）
+        loadSettings();
+        // 系统托盘：左键切换显示，右键菜单（切换/设置/退出）
+        setupTray();
         // 天气：启动时 + 每 10 分钟刷新
         fetchWeather();
         QTimer* wtimer = new QTimer(this);
@@ -99,7 +106,7 @@ protected:
         p.setRenderHint(QPainter::Antialiasing);
         // 背景半透明灰色 + 整体圆角（rgba(20,20,20,150)，四角透明）
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor(20, 20, 20, 150));
+        p.setBrush(QColor(20, 20, 20, m_alpha));
         p.drawRoundedRect(QRectF(rect()), CORNER_R, CORNER_R);
         QDateTime now = QDateTime::currentDateTime();
         QTime t = now.time();
@@ -276,7 +283,7 @@ private:
         cf.setPointSize(11);
         cf.setBold(true);
         p->setFont(cf);
-        p->drawText(QRect(x, y, CITY_W, h), Qt::AlignCenter, QString::fromUtf8(kCities[idx].name));
+        p->drawText(QRect(x, y, CITY_W, h), Qt::AlignCenter, m_wcityName[idx]);
 
         // 拆分 "天气描述 最低~最高°C"（天气描述无空格，故按第一个空格拆）
         QString wStr = m_weather[idx].isEmpty() ? "…" : m_weather[idx];
@@ -342,7 +349,7 @@ private:
     // 获取天气（wttr.in j1：中文天气 + 温度区间 min~max°C）
     void fetchWeather() {
         for (int i = 0; i < WEATHER_N; ++i) {
-            QString q = QString::fromUtf8(kCities[i].pinyin);
+            QString q = m_wcityName[i];
             QProcess* proc = new QProcess(this);
             connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                     this, [this, proc, i](int, QProcess::ExitStatus) {
@@ -372,13 +379,145 @@ private:
                 proc->deleteLater();
             });
             QStringList args;
-            args << "-s" << "--max-time" << "10" << "https://wttr.in/" + q + "?format=j1";
+            args << "-s" << "--max-time" << "10" << "https://wttr.in/" + QString::fromLatin1(QUrl::toPercentEncoding(q)) + "?format=j1";
             proc->start("curl", args);
         }
     }
 
+    // ---- 系统托盘 ----
+    void setupTray() {
+        if (!QSystemTrayIcon::isSystemTrayAvailable()) return;
+
+        m_menu = new QMenu(this);
+        m_toggleAct = m_menu->addAction(QString::fromUtf8("隐藏"));
+        m_settingsAct = m_menu->addAction(QString::fromUtf8("设置…"));
+        m_exitAct = m_menu->addAction(QString::fromUtf8("退出"));
+
+        m_tray = new QSystemTrayIcon(makeTrayIcon(true), this);
+        m_tray->setToolTip(QStringLiteral("abcclock"));
+        m_tray->setContextMenu(m_menu);
+
+        connect(m_toggleAct, &QAction::triggered, this, [this]() { toggleVisible(); });
+        connect(m_settingsAct, &QAction::triggered, this, [this]() { openSettings(); });
+        connect(m_exitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
+        // 左键单击（Trigger）切换显示/隐藏；右键由 setContextMenu 弹出菜单
+        connect(m_tray, &QSystemTrayIcon::activated, this,
+                [this](QSystemTrayIcon::ActivationReason r) {
+                    if (r == QSystemTrayIcon::Trigger) toggleVisible();
+                    else if (r == QSystemTrayIcon::Context && m_menu)
+                        m_menu->popup(QCursor::pos());
+                });
+        m_tray->show();
+    }
+
+    void toggleVisible() {
+        if (isVisible()) hide();
+        else show();
+        updateTray();
+    }
+
+    void updateTray() {
+        if (!m_tray) return;
+        m_tray->setIcon(makeTrayIcon(isVisible()));
+        if (m_toggleAct)
+            m_toggleAct->setText(isVisible() ? QString::fromUtf8("隐藏")
+                                             : QString::fromUtf8("显示"));
+    }
+
+    // 托盘图标：小表盘 + 当前时分针；隐藏时整体压暗（同 hoverclock 行为）
+    static QIcon makeTrayIcon(bool active) {
+        const int S = 64;
+        QPixmap pm(S, S);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        if (!active) p.setOpacity(0.4);
+
+        p.setPen(QPen(QColor(0x00, 0x00, 0x00), 2));
+        p.setBrush(DIAL_BG);
+        p.drawEllipse(3, 3, S - 6, S - 6);
+
+        QTime t = QTime::currentTime();
+        double cx = S / 2.0, cy = S / 2.0;
+        auto hand = [&](double deg, double len, const QColor& c, double width) {
+            double rad = qDegreesToRadians(deg);
+            p.setPen(QPen(c, width, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(QPointF(cx, cy),
+                       QPointF(cx + len * std::sin(rad), cy - len * std::cos(rad)));
+        };
+        hand((t.hour() % 12 + t.minute() / 60.0) * 30.0, 15, HAND_COL, 3.5);
+        hand(t.minute() * 6.0, 20, HAND_COL, 2.5);
+        hand(t.second() * 6.0, 22, SEC_COL, 1.5);
+        p.setPen(Qt::NoPen);
+        p.setBrush(TEXT_COL);
+        p.drawEllipse(QPointF(cx, cy), 2.5, 2.5);
+        return QIcon(pm);
+    }
+
+    // ---- 设置（背景不透明度 + 天气城市；QSettings 持久化）----
+    void openSettings() {
+        QDialog dlg(this);
+        dlg.setWindowTitle(QString::fromUtf8("abcclock 设置"));
+        QFormLayout* form = new QFormLayout(&dlg);
+
+        QSlider* alpha = new QSlider(Qt::Horizontal);
+        alpha->setRange(20, 100);
+        alpha->setValue(qBound(20, m_alpha * 100 / 255, 100));
+        alpha->setMinimumWidth(220);
+        form->addRow(QString::fromUtf8("背景不透明度"), alpha);
+
+        QLineEdit* edits[WEATHER_N];
+        for (int i = 0; i < WEATHER_N; ++i) {
+            edits[i] = new QLineEdit(m_wcityName[i]);
+            form->addRow(QString::fromUtf8("天气城市 %1").arg(i + 1), edits[i]);
+        }
+
+        QDialogButtonBox* bb =
+            new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        form->addRow(bb);
+        connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+        connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+        if (dlg.exec() == QDialog::Accepted) {
+            m_alpha = alpha->value() * 255 / 100;
+            for (int i = 0; i < WEATHER_N; ++i) {
+                QString c = edits[i]->text().trimmed();
+                if (!c.isEmpty()) m_wcityName[i] = c;
+            }
+            saveSettings();
+            fetchWeather();
+            update();
+        }
+    }
+
+    void loadSettings() {
+        QSettings s(QStringLiteral("abcclock"), QStringLiteral("abcclock"));
+        m_alpha = qBound(20, s.value(QStringLiteral("alpha"), 150).toInt(), 255);
+        static const char* defs[WEATHER_N] = {"庆阳", "成都", "佛山"};
+        for (int i = 0; i < WEATHER_N; ++i) {
+            m_wcityName[i] = s.value(QStringLiteral("weather%1").arg(i),
+                                     QString::fromUtf8(defs[i])).toString();
+        }
+    }
+
+    void saveSettings() {
+        QSettings s(QStringLiteral("abcclock"), QStringLiteral("abcclock"));
+        s.setValue(QStringLiteral("alpha"), m_alpha);
+        for (int i = 0; i < WEATHER_N; ++i)
+            s.setValue(QStringLiteral("weather%1").arg(i), m_wcityName[i]);
+    }
+
     QString m_city;
     QString m_weather[WEATHER_N];
+    QString m_wcityName[WEATHER_N] = { QString::fromUtf8("庆阳"),
+                                       QString::fromUtf8("成都"),
+                                       QString::fromUtf8("佛山") };
+    int m_alpha = 150;                 // 背景不透明度（0-255），设置面板可调
+    QSystemTrayIcon* m_tray = nullptr;
+    QMenu* m_menu = nullptr;
+    QAction* m_toggleAct = nullptr;
+    QAction* m_settingsAct = nullptr;
+    QAction* m_exitAct = nullptr;
 };
 
 int main(int argc, char* argv[]) {
