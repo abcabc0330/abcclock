@@ -149,7 +149,10 @@ protected:
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(20, 20, 20, m_alpha));
         p.drawRoundedRect(QRectF(rect()), CORNER_R, CORNER_R);
-        QDateTime now = QDateTime::currentDateTime();
+        // 表盘时间：按设置中选定的城市时区（默认北京），星期/日期同步
+        const QDateTime nowSystem = QDateTime::currentDateTime();
+        QTimeZone dialZone(m_dialCity.zone.toUtf8());
+        QDateTime now = dialZone.isValid() ? nowSystem.toTimeZone(dialZone) : nowSystem;
         QTime t = now.time();
 
         // ---- 上方：tzclock 表盘（192x192，居左，同心）----
@@ -591,17 +594,25 @@ private:
         form->addRow(QString::fromUtf8("时区时间字号"), fsT);
         form->addRow(QString::fromUtf8("天气行字号"), fsWe);
 
+        auto fillCityCombo = [](QComboBox* cb, const QString& name, const QString& zone) {
+            for (const CityTz& c : kCityTz)
+                cb->addItem(QString::fromUtf8(c.name), QString::fromLatin1(c.tz));
+            int idx = cb->findData(zone);
+            if (idx < 0) {
+                cb->insertItem(0, name, zone);
+                idx = 0;
+            }
+            cb->setCurrentIndex(idx);
+        };
+
+        QComboBox* dialBox = new QComboBox;
+        fillCityCombo(dialBox, m_dialCity.name, m_dialCity.zone);
+        form->addRow(QString::fromUtf8("表盘时间城市"), dialBox);
+
         QComboBox* tzBox[TZ_N];
         for (int i = 0; i < TZ_N; ++i) {
             tzBox[i] = new QComboBox;
-            for (const CityTz& c : kCityTz)
-                tzBox[i]->addItem(QString::fromUtf8(c.name), QString::fromLatin1(c.tz));
-            int idx = tzBox[i]->findData(m_tzCity[i].zone);
-            if (idx < 0) {
-                tzBox[i]->insertItem(0, m_tzCity[i].name, m_tzCity[i].zone);
-                idx = 0;
-            }
-            tzBox[i]->setCurrentIndex(idx);
+            fillCityCombo(tzBox[i], m_tzCity[i].name, m_tzCity[i].zone);
             form->addRow(QString::fromUtf8("时区城市 %1").arg(i + 1), tzBox[i]);
         }
 
@@ -623,6 +634,8 @@ private:
             m_fsDate = fsD->value();
             m_fsTz = fsT->value();
             m_fsWeather = fsWe->value();
+            m_dialCity.name = dialBox->currentText();
+            m_dialCity.zone = dialBox->currentData().toString();
             for (int i = 0; i < TZ_N; ++i) {
                 m_tzCity[i].name = tzBox[i]->currentText();
                 m_tzCity[i].zone = tzBox[i]->currentData().toString();
@@ -649,6 +662,10 @@ private:
             m_wcityName[i] = s.value(QStringLiteral("weather%1").arg(i),
                                      QString::fromUtf8(wdefs[i])).toString();
         }
+        m_dialCity.name = s.value(QStringLiteral("dialName"),
+                                  QString::fromUtf8("北京")).toString();
+        m_dialCity.zone = s.value(QStringLiteral("dialZone"),
+                                  QStringLiteral("Asia/Shanghai")).toString();
         static const char* tdefs[TZ_N] = {"北京", "纽约", "洛杉矶"};
         static const char* zdefs[TZ_N] = {"Asia/Shanghai", "America/New_York",
                                           "America/Los_Angeles"};
@@ -669,6 +686,8 @@ private:
         s.setValue(QStringLiteral("fsWeather"), m_fsWeather);
         for (int i = 0; i < WEATHER_N; ++i)
             s.setValue(QStringLiteral("weather%1").arg(i), m_wcityName[i]);
+        s.setValue(QStringLiteral("dialName"), m_dialCity.name);
+        s.setValue(QStringLiteral("dialZone"), m_dialCity.zone);
         for (int i = 0; i < TZ_N; ++i) {
             s.setValue(QStringLiteral("tzName%1").arg(i), m_tzCity[i].name);
             s.setValue(QStringLiteral("tzZone%1").arg(i), m_tzCity[i].zone);
@@ -681,6 +700,8 @@ private:
                                        QString::fromUtf8("成都"),
                                        QString::fromUtf8("佛山") };
     struct TzCitySel { QString name; QString zone; };
+    TzCitySel m_dialCity = { QString::fromUtf8("北京"),
+                             QStringLiteral("Asia/Shanghai") };
     TzCitySel m_tzCity[TZ_N] = {
         { QString::fromUtf8("北京"),   QStringLiteral("Asia/Shanghai") },
         { QString::fromUtf8("纽约"),   QStringLiteral("America/New_York") },
