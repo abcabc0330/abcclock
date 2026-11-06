@@ -16,7 +16,9 @@
 - 窗口使用 `override_redirect`，全屏终端（如 ghostty）也不会遮住它
 - **系统托盘**（StatusNotifierItem）：
   - 左键单击图标：显示 / 隐藏窗口（图标隐藏时变暗）
-  - 右键菜单：`隐藏`（或 `显示`）/ `设置…` / `开机运行`（复选框）/ `退出`
+  - 右键菜单：`隐藏`（或 `显示`）/ `设置…` / `开机运行（已开启/已关闭）`（复选框）/ `退出`
+    复选框的勾选与括号内文字均随 `~/.config/autostart/abcclock.desktop` 是否存在
+    实时刷新，每次弹出菜单都会重新读取
 - **开机运行**（右键菜单勾选项）：写入 / 删除
   `~/.config/autostart/abcclock.desktop`；勾选状态以该文件是否存在为准，
   重启后保留。若已安装 `abcclock.desktop`（`/usr/share/applications` 或

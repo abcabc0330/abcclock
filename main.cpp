@@ -445,7 +445,6 @@ private:
         m_settingsAct = m_menu->addAction(QString::fromUtf8("设置…"));
         m_autostartAct = m_menu->addAction(QString::fromUtf8("开机运行"));
         m_autostartAct->setCheckable(true);
-        m_autostartAct->setChecked(isAutostartEnabled());
         m_exitAct = m_menu->addAction(QString::fromUtf8("退出"));
 
         m_tray = new QSystemTrayIcon(makeTrayIcon(true), this);
@@ -455,8 +454,18 @@ private:
         connect(m_toggleAct, &QAction::triggered, this, [this]() { toggleVisible(); });
         connect(m_settingsAct, &QAction::triggered, this, [this]() { openSettings(); });
         connect(m_exitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
-        connect(m_autostartAct, &QAction::triggered, this, [this](bool on) {
-            if (!setAutostartEnabled(on)) m_autostartAct->setChecked(!on);
+        // 每次弹出菜单都用文件系统状态刷新勾选与文字——外部增删自启项也能反映
+        auto refreshAutostart = [this]() {
+            const bool on = isAutostartEnabled();
+            m_autostartAct->setChecked(on);
+            m_autostartAct->setText(on ? QString::fromUtf8("开机运行（已开启）")
+                                       : QString::fromUtf8("开机运行（已关闭）"));
+        };
+        refreshAutostart();
+        connect(m_menu, &QMenu::aboutToShow, this, refreshAutostart);
+        connect(m_autostartAct, &QAction::triggered, this, [this, refreshAutostart](bool on) {
+            if (setAutostartEnabled(on)) refreshAutostart();
+            else m_autostartAct->setChecked(!on);
         });
         // 左键单击（Trigger）切换显示/隐藏；右键由 setContextMenu 弹出菜单
         connect(m_tray, &QSystemTrayIcon::activated, this,
