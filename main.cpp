@@ -38,6 +38,8 @@
 #include <QFormLayout>
 #include <QSlider>
 #include <QLineEdit>
+#include <QSpinBox>
+#include <QComboBox>
 #include <QUrl>
 #include <QCursor>
 
@@ -65,15 +67,49 @@ static const QColor NUM_COL   (0x9a, 0x9a, 0x9a);  // 时点数字
 static const QColor MUTED_COL (0x8a, 0x8a, 0x8a);  // 天气文字灰色
 
 // 底部天气城市：拼音名（wttr.in 查询）+ 显示中文名
-// 时区城市：名字 + IANA 时区
-struct TzCity {
-    const char* name;   // 显示中文名
-    const char* tz;     // IANA 时区
+// 时区城市候选（设置面板下拉框）：显示名 + IANA 时区
+struct CityTz {
+    const char* name;
+    const char* tz;
 };
-static const TzCity kTzCities[TZ_N] = {
-    {"北京",   "Asia/Shanghai"},
-    {"纽约",   "America/New_York"},
-    {"洛杉矶", "America/Los_Angeles"},
+static const CityTz kCityTz[] = {
+    {"北京",       "Asia/Shanghai"},
+    {"上海",       "Asia/Shanghai"},
+    {"香港",       "Asia/Hong_Kong"},
+    {"台北",       "Asia/Taipei"},
+    {"东京",       "Asia/Tokyo"},
+    {"首尔",       "Asia/Seoul"},
+    {"新加坡",     "Asia/Singapore"},
+    {"曼谷",       "Asia/Bangkok"},
+    {"雅加达",     "Asia/Jakarta"},
+    {"孟买",       "Asia/Kolkata"},
+    {"德里",       "Asia/Kolkata"},
+    {"迪拜",       "Asia/Dubai"},
+    {"莫斯科",     "Europe/Moscow"},
+    {"伊斯坦布尔", "Europe/Istanbul"},
+    {"柏林",       "Europe/Berlin"},
+    {"巴黎",       "Europe/Paris"},
+    {"伦敦",       "Europe/London"},
+    {"里斯本",     "Europe/Lisbon"},
+    {"开罗",       "Africa/Cairo"},
+    {"约翰内斯堡", "Africa/Johannesburg"},
+    {"拉各斯",     "Africa/Lagos"},
+    {"纽约",       "America/New_York"},
+    {"芝加哥",     "America/Chicago"},
+    {"丹佛",       "America/Denver"},
+    {"洛杉矶",     "America/Los_Angeles"},
+    {"温哥华",     "America/Vancouver"},
+    {"多伦多",     "America/Toronto"},
+    {"墨西哥城",   "America/Mexico_City"},
+    {"圣保罗",     "America/Sao_Paulo"},
+    {"布宜诺斯艾利斯", "America/Argentina/Buenos_Aires"},
+    {"悉尼",       "Australia/Sydney"},
+    {"墨尔本",     "Australia/Melbourne"},
+    {"珀斯",       "Australia/Perth"},
+    {"奥克兰",     "Pacific/Auckland"},
+    {"檀香山",     "Pacific/Honolulu"},
+    {"安克雷奇",   "America/Anchorage"},
+    {"UTC",        "UTC"},
 };
 
 class HoverTzClock : public QWidget {
@@ -125,9 +161,9 @@ protected:
         for (int i = 0; i < TZ_N; ++i) {
             int ry = timeY + i * TZ_ROW_H;
             // 该城市时区当前时间
-            QTimeZone tz(QByteArray(kTzCities[i].tz));
+            QTimeZone tz(m_tzCity[i].zone.toUtf8());
             QDateTime local = tz.isValid() ? now.toTimeZone(tz) : now;
-            drawCity(&p, 0, ry, CITY_W, TZ_ROW_H, QString::fromUtf8(kTzCities[i].name));
+            drawCity(&p, 0, ry, CITY_W, TZ_ROW_H, m_tzCity[i].name);
             drawTime(&p, CITY_W, ry, WIN_W - CITY_W, TZ_ROW_H, local);
         }
 
@@ -219,7 +255,7 @@ private:
         };
         QString zh = QString::fromUtf8(kZh[d.dayOfWeek() - 1]);
         QFont f = p->font();
-        f.setPointSize(14);
+        f.setPointSize(m_fsWeekday);
         f.setBold(true);
         p->setFont(f);
         p->setPen(TEXT_COL);
@@ -232,11 +268,15 @@ private:
         // 自动增大字号直到文字宽≈表盘宽(192)，填满宽度
         QFont f = p->font();
         f.setBold(true);
-        for (int pt = 10; pt <= 40; ++pt) {
-            f.setPointSize(pt);
-            QFontMetrics fm(f);
-            if (fm.horizontalAdvance(dateStr) >= w - 4) {
-                break;
+        if (m_fsDate > 0) {
+            f.setPointSize(m_fsDate);
+        } else {
+            for (int pt = 10; pt <= 40; ++pt) {
+                f.setPointSize(pt);
+                QFontMetrics fm(f);
+                if (fm.horizontalAdvance(dateStr) >= w - 4) {
+                    break;
+                }
             }
         }
         p->setFont(f);
@@ -261,16 +301,20 @@ private:
         // 自动增大字号直到填满宽（但不超过行高，避免溢出）
         QFont f = p->font();
         f.setBold(true);
-        int maxPt = 24;  // 初始 24pt，受行高 56 限制约 38pt
-        for (int pt = 16; pt <= 40; ++pt) {
-            f.setPointSize(pt);
-            QFontMetrics fm(f);
-            if (fm.height() > h - 6 || fm.horizontalAdvance(timeStr) >= w - 2) {
-                break;
+        if (m_fsTz > 0) {
+            f.setPointSize(m_fsTz);
+        } else {
+            int maxPt = 24;  // 初始 24pt，受行高 56 限制约 38pt
+            for (int pt = 16; pt <= 40; ++pt) {
+                f.setPointSize(pt);
+                QFontMetrics fm(f);
+                if (fm.height() > h - 6 || fm.horizontalAdvance(timeStr) >= w - 2) {
+                    break;
+                }
+                maxPt = pt;
             }
-            maxPt = pt;
+            f.setPointSize(maxPt);
         }
-        f.setPointSize(maxPt);
         p->setFont(f);
         p->drawText(QRect(x, y, w, h), Qt::AlignCenter, timeStr);
     }
@@ -280,7 +324,7 @@ private:
         // 城市名（左，横排小字）
         p->setPen(TEXT_COL);
         QFont cf = p->font();
-        cf.setPointSize(11);
+        cf.setPointSize(m_fsWeather);
         cf.setBold(true);
         p->setFont(cf);
         p->drawText(QRect(x, y, CITY_W, h), Qt::AlignCenter, m_wcityName[idx]);
@@ -298,7 +342,7 @@ private:
 
         // 天气情况：固定 4 字宽区域，居中
         QFont wf = p->font();
-        wf.setPointSize(13);
+        wf.setPointSize(m_fsWeather + 2);
         wf.setBold(false);
         p->setFont(wf);
         QFontMetrics wm(wf);
@@ -311,7 +355,7 @@ private:
         // 温度区间：剩余宽度右对齐（清晰大字号）
         if (!temp.isEmpty()) {
             QFont tf = wf;
-            tf.setPointSize(14);
+            tf.setPointSize(m_fsWeather + 3);
             p->setFont(tf);
             p->drawText(QRect(wx + descW, y, w - CITY_W - descW, h),
                         Qt::AlignVCenter | Qt::AlignRight, temp);
@@ -454,7 +498,7 @@ private:
         return QIcon(pm);
     }
 
-    // ---- 设置（背景不透明度 + 天气城市；QSettings 持久化）----
+    // ---- 设置（不透明度 / 4 区域字号 / 时区城市 / 天气城市；QSettings 持久化）----
     void openSettings() {
         QDialog dlg(this);
         dlg.setWindowTitle(QString::fromUtf8("abcclock 设置"));
@@ -465,6 +509,41 @@ private:
         alpha->setValue(qBound(20, m_alpha * 100 / 255, 100));
         alpha->setMinimumWidth(220);
         form->addRow(QString::fromUtf8("背景不透明度"), alpha);
+
+        auto mkSpin = [&](int value, int lo, int hi) {
+            QSpinBox* sb = new QSpinBox;
+            sb->setRange(lo, hi);
+            sb->setValue(value);
+            if (lo == 0) {
+                sb->setSpecialValueText(QString::fromUtf8("自动"));
+                sb->setSuffix(QStringLiteral(" pt"));
+            } else {
+                sb->setSuffix(QStringLiteral(" pt"));
+            }
+            return sb;
+        };
+        QSpinBox* fsW = mkSpin(m_fsWeekday, 6, 40);
+        QSpinBox* fsD = mkSpin(m_fsDate, 0, 48);
+        QSpinBox* fsT = mkSpin(m_fsTz, 0, 48);
+        QSpinBox* fsWe = mkSpin(m_fsWeather, 6, 30);
+        form->addRow(QString::fromUtf8("星期行字号"), fsW);
+        form->addRow(QString::fromUtf8("日期行字号"), fsD);
+        form->addRow(QString::fromUtf8("时区时间字号"), fsT);
+        form->addRow(QString::fromUtf8("天气行字号"), fsWe);
+
+        QComboBox* tzBox[TZ_N];
+        for (int i = 0; i < TZ_N; ++i) {
+            tzBox[i] = new QComboBox;
+            for (const CityTz& c : kCityTz)
+                tzBox[i]->addItem(QString::fromUtf8(c.name), QString::fromLatin1(c.tz));
+            int idx = tzBox[i]->findData(m_tzCity[i].zone);
+            if (idx < 0) {
+                tzBox[i]->insertItem(0, m_tzCity[i].name, m_tzCity[i].zone);
+                idx = 0;
+            }
+            tzBox[i]->setCurrentIndex(idx);
+            form->addRow(QString::fromUtf8("时区城市 %1").arg(i + 1), tzBox[i]);
+        }
 
         QLineEdit* edits[WEATHER_N];
         for (int i = 0; i < WEATHER_N; ++i) {
@@ -480,6 +559,14 @@ private:
 
         if (dlg.exec() == QDialog::Accepted) {
             m_alpha = alpha->value() * 255 / 100;
+            m_fsWeekday = fsW->value();
+            m_fsDate = fsD->value();
+            m_fsTz = fsT->value();
+            m_fsWeather = fsWe->value();
+            for (int i = 0; i < TZ_N; ++i) {
+                m_tzCity[i].name = tzBox[i]->currentText();
+                m_tzCity[i].zone = tzBox[i]->currentData().toString();
+            }
             for (int i = 0; i < WEATHER_N; ++i) {
                 QString c = edits[i]->text().trimmed();
                 if (!c.isEmpty()) m_wcityName[i] = c;
@@ -493,18 +580,39 @@ private:
     void loadSettings() {
         QSettings s(QStringLiteral("abcclock"), QStringLiteral("abcclock"));
         m_alpha = qBound(20, s.value(QStringLiteral("alpha"), 150).toInt(), 255);
-        static const char* defs[WEATHER_N] = {"庆阳", "成都", "佛山"};
+        m_fsWeekday = qBound(6, s.value(QStringLiteral("fsWeekday"), 14).toInt(), 40);
+        m_fsDate = qBound(0, s.value(QStringLiteral("fsDate"), 0).toInt(), 48);
+        m_fsTz = qBound(0, s.value(QStringLiteral("fsTz"), 0).toInt(), 48);
+        m_fsWeather = qBound(6, s.value(QStringLiteral("fsWeather"), 11).toInt(), 30);
+        static const char* wdefs[WEATHER_N] = {"庆阳", "成都", "佛山"};
         for (int i = 0; i < WEATHER_N; ++i) {
             m_wcityName[i] = s.value(QStringLiteral("weather%1").arg(i),
-                                     QString::fromUtf8(defs[i])).toString();
+                                     QString::fromUtf8(wdefs[i])).toString();
+        }
+        static const char* tdefs[TZ_N] = {"北京", "纽约", "洛杉矶"};
+        static const char* zdefs[TZ_N] = {"Asia/Shanghai", "America/New_York",
+                                          "America/Los_Angeles"};
+        for (int i = 0; i < TZ_N; ++i) {
+            m_tzCity[i].name = s.value(QStringLiteral("tzName%1").arg(i),
+                                       QString::fromUtf8(tdefs[i])).toString();
+            m_tzCity[i].zone = s.value(QStringLiteral("tzZone%1").arg(i),
+                                       QString::fromLatin1(zdefs[i])).toString();
         }
     }
 
     void saveSettings() {
         QSettings s(QStringLiteral("abcclock"), QStringLiteral("abcclock"));
         s.setValue(QStringLiteral("alpha"), m_alpha);
+        s.setValue(QStringLiteral("fsWeekday"), m_fsWeekday);
+        s.setValue(QStringLiteral("fsDate"), m_fsDate);
+        s.setValue(QStringLiteral("fsTz"), m_fsTz);
+        s.setValue(QStringLiteral("fsWeather"), m_fsWeather);
         for (int i = 0; i < WEATHER_N; ++i)
             s.setValue(QStringLiteral("weather%1").arg(i), m_wcityName[i]);
+        for (int i = 0; i < TZ_N; ++i) {
+            s.setValue(QStringLiteral("tzName%1").arg(i), m_tzCity[i].name);
+            s.setValue(QStringLiteral("tzZone%1").arg(i), m_tzCity[i].zone);
+        }
     }
 
     QString m_city;
@@ -512,6 +620,16 @@ private:
     QString m_wcityName[WEATHER_N] = { QString::fromUtf8("庆阳"),
                                        QString::fromUtf8("成都"),
                                        QString::fromUtf8("佛山") };
+    struct TzCitySel { QString name; QString zone; };
+    TzCitySel m_tzCity[TZ_N] = {
+        { QString::fromUtf8("北京"),   QStringLiteral("Asia/Shanghai") },
+        { QString::fromUtf8("纽约"),   QStringLiteral("America/New_York") },
+        { QString::fromUtf8("洛杉矶"), QStringLiteral("America/Los_Angeles") },
+    };
+    int m_fsWeekday = 14;   // 星期行字号
+    int m_fsDate = 0;       // 日期行字号（0 = 自动填满宽度）
+    int m_fsTz = 0;         // 时区时间字号（0 = 自动填满行）
+    int m_fsWeather = 11;   // 天气行基准字号（描述 +2，温度 +3）
     int m_alpha = 150;                 // 背景不透明度（0-255），设置面板可调
     QSystemTrayIcon* m_tray = nullptr;
     QMenu* m_menu = nullptr;
