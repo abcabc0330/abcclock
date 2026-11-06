@@ -9,3 +9,9 @@ qrc_*.cpp
 abcclock
 abcclock.desktop.bak
 build/
+
+# makepkg 产物
+src/
+pkg/
+*.pkg.tar.zst
+*.tar.gz
