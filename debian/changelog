@@ -1,3 +1,13 @@
+abcclock (2.0.1-1) unstable; urgency=medium
+
+  * 启动健壮性：启动前用 xcb_connect 试连 DISPLAY，连不上时打印可读原因并返回 1，
+    不再由 Qt 的 xcb 插件直接 SIGABRT（症状为“双击图标毫无反应、无任何输出”）。
+  * Wayland 会话下若启动器未导出 DISPLAY，自动试连 Xwayland 常用的 :1 并补上
+    DISPLAY + QT_QPA_PLATFORM=xcb；显式指定 QT_QPA_PLATFORM 时不干预。
+  * 构建：新增 xcb 链接（pkg-config xcb / libxcb1-dev / libxcb）。
+
+ -- ddfabc <liqiang0330@gmail.com>  Sat, 07 Nov 2026 03:27:00 -0700
+
 abcclock (2.0.0-1) unstable; urgency=medium
 
   * 新增 macOS 版：Qt6 + Cocoa 悬浮窗口（NSFloatingWindowLevel、跨 Space）、

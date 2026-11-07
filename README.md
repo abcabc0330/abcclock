@@ -47,7 +47,7 @@
 
 | 发行版 | 依赖 |
 |---|---|
-| Arch | `qt5-base` `dbus` `pkgconf` `make` |
+| Arch | `qt5-base` `dbus` `libxcb` `pkgconf` `make` |
 | Debian/Ubuntu | `qtbase5-dev` `qt5-qmake` `libdbus-1-dev` `pkg-config` `build-essential` |
 
 ```bash
@@ -69,8 +69,12 @@ qmake abcclock.pro && make -j$(nproc)       # Debian/Ubuntu（或 QT_SELECT=qt5 
   即 override-redirect，WM 不会接管，全屏终端也盖不住；
 - 启动时按 `POS_RIGHT_MARGIN`(20px) / `POS_TOP`(50px) 贴主屏右上角摆放
   （1920 宽屏幕 → x=1700、右缘 1900）；
-- Wayland 会话下若未显式设置 `QT_QPA_PLATFORM` 且存在 `DISPLAY`（XWayland），
-  自动 `QT_QPA_PLATFORM=xcb`；无 XWayland 时保持原生 Wayland（此时无法自定位）。
+- 启动时先用 `xcb_connect` 试连一次当前 `DISPLAY`；连不上且未显式指定
+  `QT_QPA_PLATFORM` 时，直接在 stderr 说明原因并返回 1（Qt 自己遇到这种情况会
+  `SIGABRT`，不打印原因）；
+- Wayland 会话下若启动器没导出 `DISPLAY`（桌面项、无图形 shell、SSH 常见），
+  自动试连 Xwayland 常用的 `:1`，成功则补上 `DISPLAY` 并切到 `QT_QPA_PLATFORM=xcb`；
+  显式指定 `QT_QPA_PLATFORM`（如 `wayland`）时不干预。
 
 ## macOS（Apple Silicon / Intel）
 

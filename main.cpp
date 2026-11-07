@@ -47,9 +47,11 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <cstdio>
 #include "platform.h"
 #if defined(Q_OS_LINUX)
 #include <dbus/dbus.h>
+#include <xcb/xcb.h>
 #include <unistd.h>
 #elif defined(Q_OS_MACOS)
 #include <unistd.h>
@@ -870,14 +872,53 @@ static QString findTrayBus() {
 }
 #endif
 
+#if defined(Q_OS_LINUX)
+// 试连一个 X 显示（含认证）。失败时 xcb_connect 不打印任何东西，由调用方决定提示。
+static bool xDisplayConnectable(const QByteArray& display) {
+    int screen = 0;
+    xcb_connection_t* conn =
+        xcb_connect(display.isEmpty() ? nullptr : display.constData(), &screen);
+    const bool ok = conn && xcb_connection_has_error(conn) == 0;
+    if (conn)
+        xcb_disconnect(conn);
+    return ok;
+}
+
+static bool xDisplayReachable() {
+    const QByteArray display = qgetenv("DISPLAY");
+    return !display.isEmpty() && xDisplayConnectable(display);
+}
+
+// Wayland 会话：本程序依赖 override-redirect 固定悬浮，需走 XWayland。
+// 有些启动器（或无图形 shell / SSH）不导出 DISPLAY，此时回落 Xwayland 常用的 :1。
+// 返回 false 表示按自动选择走不通（用户显式指定 QT_QPA_PLATFORM 时不干预，一律 true）。
+static bool prepareX11Display() {
+    if (!qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
+        return true;
+    if (qEnvironmentVariableIsEmpty("DISPLAY")
+        && !qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY")
+        && xDisplayConnectable(":1"))
+        qputenv("DISPLAY", ":1");
+    if (!xDisplayReachable())
+        return false;
+    if (!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))
+        qputenv("QT_QPA_PLATFORM", "xcb");
+    return true;
+}
+#endif
+
 int main(int argc, char* argv[]) {
 #if defined(Q_OS_LINUX)
-    // Wayland 会话：应用依赖 override-redirect 固定悬浮，需走 XWayland。
-    // 仅当用户没有显式指定平台、且确实有 XWayland（DISPLAY）时切换。
-    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")
-        && !qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY")
-        && !qEnvironmentVariableIsEmpty("DISPLAY"))
-        qputenv("QT_QPA_PLATFORM", "xcb");
+    // 没有可用 X 时 Qt 的 xcb 插件会直接 abort（SIGABRT，几乎不打印原因），
+    // 这里提前试连一次并给出可读提示、返回非零码。
+    if (!prepareX11Display()) {
+        std::fprintf(stderr,
+                     "abcclock: 无法启动：DISPLAY=\"%s\" 连不上（WAYLAND_DISPLAY=\"%s\"）。\n"
+                     "本程序是 X11 悬浮时钟：Wayland 会话需要 Xwayland（通常 DISPLAY=:1，"
+                     "必要时设置 XAUTHORITY），或显式导出 QT_QPA_PLATFORM 指定平台。\n",
+                     qgetenv("DISPLAY").constData(), qgetenv("WAYLAND_DISPLAY").constData());
+        return 1;
+    }
     // 托盘总线自愈（必须在 QApplication 之前设置环境变量）
     const QString bus = findTrayBus();
     if (!bus.isEmpty() && bus != qEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"))

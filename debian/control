@@ -7,6 +7,7 @@ Build-Depends: debhelper-compat (= 13),
                qt5-qmake,
                qtchooser,
                libdbus-1-dev,
+               libxcb1-dev,
                pkg-config
 Standards-Version: 4.6.2
 Rules-Requires-Root: no

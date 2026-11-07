@@ -11,7 +11,7 @@ SOURCES += main.cpp
 unix:!macx {
     QT += dbus
     CONFIG += link_pkgconfig
-    PKGCONFIG += dbus-1
+    PKGCONFIG += dbus-1 xcb
     SOURCES += platform_linux.cpp
 
     # 安装路径（make install 使用）
