@@ -129,6 +129,10 @@ static const CityTz kCityTz[] = {
     {"UTC",        "UTC"},
 };
 
+#if defined(Q_OS_LINUX)
+static QString findTrayBus();   // 定义见文件末尾：探测带 StatusNotifierWatcher 的总线
+#endif
+
 class HoverTzClock : public QWidget {
 public:
     explicit HoverTzClock(const QString& city, QWidget* parent = nullptr)
@@ -485,8 +489,49 @@ private:
     }
 
     // ---- 系统托盘 ----
+    // Qt 在 QApplication 构造时就决定了托盘后端是否可用，之后即使 waybar 的
+    // StatusNotifierWatcher 才注册，isSystemTrayAvailable() 也不会变成 true。
+    // 登录自启时正好是这种顺序（sway 先拉起 app，waybar 稍后才起来），
+    // 所以这里用 libdbus 自己盯着总线：一等出现 watcher 就重启自己一次，
+    // 让新的 QApplication 在“有托盘宿主”的前提下初始化。
+    void retryTray() {
+        if (QSystemTrayIcon::isSystemTrayAvailable()) {
+            setupTray();
+            return;
+        }
+#if defined(Q_OS_LINUX)
+        if (qEnvironmentVariableIsSet("ABC_CLOCK_TRAY_REEXEC"))
+            return;   // 已经重启过一次，不再循环
+        const QString bus = findTrayBus();
+        if (bus.isEmpty())
+            return;   // 还没有任何总线带 watcher，继续等
+        qputenv("ABC_CLOCK_TRAY_REEXEC", "1");
+        if (bus != qEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"))
+            qputenv("DBUS_SESSION_BUS_ADDRESS", bus.toUtf8());
+        QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                QCoreApplication::arguments().mid(1));
+        QCoreApplication::quit();
+#endif
+    }
+
     void setupTray() {
-        if (!QSystemTrayIcon::isSystemTrayAvailable()) return;
+        if (m_tray) return;
+        if (!QSystemTrayIcon::isSystemTrayAvailable()) {
+            // 登录自启时托盘宿主（waybar 的 StatusNotifierWatcher）往往还没注册，
+            // 一次性判断会让自启实例永远没有托盘图标；每 2s 复查一次。
+            if (!m_trayRetry) {
+                m_trayRetry = new QTimer(this);
+                m_trayRetry->setInterval(2000);
+                connect(m_trayRetry, &QTimer::timeout, this, [this]() { retryTray(); });
+                m_trayRetry->start();
+            }
+            return;
+        }
+        if (m_trayRetry) {
+            m_trayRetry->stop();
+            m_trayRetry->deleteLater();
+            m_trayRetry = nullptr;
+        }
 
         m_menu = new QMenu(this);
         m_toggleAct = m_menu->addAction(QString::fromUtf8("隐藏"));
@@ -822,6 +867,7 @@ private:
     int m_fsWeather = 11;   // 天气行基准字号（描述 +2，温度 +3）
     int m_alpha = 150;                 // 背景不透明度（0-255），设置面板可调
     QSystemTrayIcon* m_tray = nullptr;
+    QTimer* m_trayRetry = nullptr;   // 托盘宿主未就绪时的重试定时器
     QMenu* m_menu = nullptr;
     QAction* m_toggleAct = nullptr;
     QAction* m_settingsAct = nullptr;

@@ -1,3 +1,12 @@
+abcclock (2.0.2-1) unstable; urgency=medium
+
+  * 修复登录自启后没有托盘图标：Qt 只在 QApplication 构造时判定一次托盘宿主，
+    而 waybar 的 StatusNotifierWatcher 常比应用晚注册。
+  * 托盘初始化失败后每 2s 复查总线；检测到 watcher 出现时带正确
+    DBUS_SESSION_BUS_ADDRESS 重启自身一次（ABC_CLOCK_TRAY_REEXEC=1 防循环）。
+
+ -- ddfabc <liqiang0330@gmail.com>  Sat, 08 Nov 2026 09:20:00 -0700
+
 abcclock (2.0.1-1) unstable; urgency=medium
 
   * 启动健壮性：启动前用 xcb_connect 试连 DISPLAY，连不上时打印可读原因并返回 1，

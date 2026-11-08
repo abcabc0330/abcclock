@@ -39,6 +39,12 @@
 > `/run/user/$UID/bus` 以及 `/tmp/dbus-*`，选择带有
 > `org.kde.StatusNotifierWatcher` 的那条总线（自启场景常遇到系统总线没有托盘
 > 宿主），探测在 `QApplication` 创建前完成。
+>
+> Qt 只在 `QApplication` 构造时判定一次“有没有托盘宿主”，之后不会重判。登录
+> 自启时 waybar 往往比本程序晚起来，表现为“有窗口、没有托盘图标”。因此托盘
+> 初始化失败后每 2s 复查一次总线：一旦探测到 watcher 出现，就用正确的
+> `DBUS_SESSION_BUS_ADDRESS` 重启自身一次（环境变量 `ABC_CLOCK_TRAY_REEXEC=1`
+> 防止循环），新进程在宿主就绪的前提下初始化，托盘随即出现。
 
 ## 构建
 
