@@ -45,6 +45,7 @@
 #include <QCursor>
 #include <QStandardPaths>
 #include <QDir>
+#include <QMouseEvent>
 #include <QFile>
 #include <QFileInfo>
 #include <cstdio>
@@ -180,6 +181,17 @@ protected:
             QTimer::singleShot(0, this, [this]() { placeAtDefaultPosition(); });
         }
 #endif
+    }
+
+    // 左键点窗口任意位置：隐藏 10 秒后自动显示
+    // 右键：弹出隐藏时长菜单
+    void mousePressEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton) {
+            hideFor(10 * 1000);
+        } else if (e->button() == Qt::RightButton) {
+            showHideMenu(e->globalPos());
+        }
+        e->accept();
     }
 
     void paintEvent(QPaintEvent*) override {
@@ -671,7 +683,43 @@ private:
     }
 #endif
 
+    // 隐藏 ms 毫秒后自动重新显示；重复调用会重置计时
+    void hideFor(int ms) {
+        hide();
+        updateTray();
+        if (!m_showTimer) {
+            m_showTimer = new QTimer(this);
+            m_showTimer->setSingleShot(true);
+            connect(m_showTimer, &QTimer::timeout, this, [this]() {
+                show();
+                updateTray();
+            });
+        }
+        m_showTimer->start(ms);
+    }
+
+    // 右键菜单：按固定时长隐藏
+    void showHideMenu(const QPoint& globalPos) {
+        if (!m_hideMenu) {
+            m_hideMenu = new QMenu(this);
+            struct Item { const char* label; int ms; };
+            static const Item items[] = {
+                { "隐藏 10 秒",   10 * 1000 },
+                { "隐藏 1 分钟",  60 * 1000 },
+                { "隐藏 10 分钟", 10 * 60 * 1000 },
+                { "隐藏 30 分钟", 30 * 60 * 1000 },
+            };
+            for (const Item& it : items) {
+                QAction* a = m_hideMenu->addAction(QString::fromUtf8(it.label));
+                const int ms = it.ms;
+                connect(a, &QAction::triggered, this, [this, ms]() { hideFor(ms); });
+            }
+        }
+        m_hideMenu->popup(globalPos);
+    }
+
     void toggleVisible() {
+        if (m_showTimer) m_showTimer->stop();
         if (isVisible()) hide();
         else show();
         updateTray();
@@ -869,6 +917,8 @@ private:
     QSystemTrayIcon* m_tray = nullptr;
     QTimer* m_trayRetry = nullptr;   // 托盘宿主未就绪时的重试定时器
     QMenu* m_menu = nullptr;
+    QMenu* m_hideMenu = nullptr;     // 窗口右键：按时长隐藏
+    QTimer* m_showTimer = nullptr;   // 自动显示定时器
     QAction* m_toggleAct = nullptr;
     QAction* m_settingsAct = nullptr;
     QAction* m_autostartAct = nullptr;
