@@ -7,12 +7,20 @@ CONFIG += c++17
 
 SOURCES += main.cpp
 
-# Linux：托盘总线探测依赖 libdbus；窗口自定位依赖 override-redirect（X11/XWayland）
+# Linux：托盘总线探测依赖 libdbus；X11 回退依赖 libxcb；
+# 原生 Wayland 走 LayerShellQt（zwlr_layer_shell_v1，overlay 层、永不抢焦点）
 unix:!macx {
     QT += dbus
     CONFIG += link_pkgconfig
     PKGCONFIG += dbus-1 xcb
     SOURCES += platform_linux.cpp
+
+    # 系统没有 layer-shell-qt 时也能编译：主程序自动回退 X11/XWayland。
+    LAYERSHELL_HEADER = /usr/include/LayerShellQt/window.h
+    exists($$LAYERSHELL_HEADER) {
+        DEFINES += ABC_HAVE_LAYER_SHELL
+        LIBS += -lLayerShellQtInterface
+    }
 
     # 安装路径（make install 使用）
     target.path = /usr/bin

@@ -1,3 +1,16 @@
+abcclock (3.0.0-1) unstable; urgency=medium
+
+  * 根除「自动弹出后抢光标」：Linux 上改为原生 Wayland wlr-layer-shell
+    overlay surface（LayerShellQt，按窗口挂载），keyboard-interactivity=none
+    + activateOnShow=false，协议层永不请求键盘焦点。
+  * 窗口定位交给合成器（anchor top|right + margin 50/20，exclusive_zone=-1），
+    不再依赖 override-redirect；全屏窗口之上仍然可见。
+  * 无 Wayland 或编译时没有 layer-shell-qt 时自动回退 X11/XWayland，
+    回退路径显式拒绝激活/焦点。
+  * 迁移到 Qt6（qmake6、qt6-wayland），设置对话框仍为普通 toplevel。
+
+ -- ddfabc <liqiang0330@gmail.com>  Mon, 09 Nov 2026 22:20:00 +0800
+
 abcclock (2.0.2-1) unstable; urgency=medium
 
   * 修复登录自启后没有托盘图标：Qt 只在 QApplication 构造时判定一次托盘宿主，

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=abcclock
-Comment=Hover desktop clock: dial, weekday, date, 3 timezones, weather (Qt5)
+Comment=Hover desktop clock: dial, weekday, date, 3 timezones, weather (Qt6, Wayland layer-shell)
 Exec=abcclock
 Icon=clock
 Terminal=false

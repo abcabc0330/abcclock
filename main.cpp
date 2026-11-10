@@ -1,4 +1,6 @@
-// abcclock：模拟表盘 + 星期 + 日期 + 三城市时区 + 天气（Qt5，200px 宽悬浮窗）
+// abcclock：模拟表盘 + 星期 + 日期 + 三城市时区 + 天气（Qt6，200px 宽悬浮窗）
+// Linux 上优先使用原生 Wayland + wlr-layer-shell（overlay 层，协议层不抢键盘焦点），
+// 无 layer-shell 或无 Wayland 会话时回退 X11/XWayland 的 override-redirect 窗口。
 // 布局（从上到下）：
 //   1. tzclock 表盘（192x192，含 12 时点数字刻度，同心）
 //   2. 年-月-日（日期行，宽=表盘直径 192，大字体）
@@ -54,6 +56,9 @@
 #include <dbus/dbus.h>
 #include <xcb/xcb.h>
 #include <unistd.h>
+#if defined(ABC_HAVE_LAYER_SHELL)
+#include <LayerShellQt/Window>
+#endif
 #elif defined(Q_OS_MACOS)
 #include <unistd.h>
 #endif
@@ -145,14 +150,34 @@ public:
         // macOS：Tool 窗口不进 Dock、不抢前台；层级由 platformSetupWindow 提到 floating
         setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
 #else
-        // X11：X11BypassWindowManagerHint => override-redirect，窗口不被 WM 管理，
-        // 因而可以自行定位、也不会被全屏终端盖住
-        setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint
-                       | Qt::X11BypassWindowManagerHint);
+        const bool wayland = QGuiApplication::platformName().startsWith(QLatin1String("wayland"));
+        if (wayland) {
+            // 原生 Wayland：wlr-layer-shell overlay surface，由合成器按 anchor 定位。
+            // keyboard-interactivity=none + activateOnShow=false：协议层保证永不参与
+            // 键盘焦点，弹出/重显示都不会把正在输入窗口的光标抢走；overlay 层在全屏
+            // 窗口之上（sway 全屏时只禁用 background/bottom/top，不禁用 overlay）。
+            setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+            setAttribute(Qt::WA_TranslucentBackground);
+            // 兜底：若当前 Qt 构建没有 layer-shell 支持（ABC_HAVE_LAYER_SHELL 未定义），
+            // 窗口只是普通 xdg_toplevel，也不会主动请求激活/焦点。
+            setAttribute(Qt::WA_ShowWithoutActivating);
+            setFocusPolicy(Qt::NoFocus);
+            createWinId();          // 先建 QWindow，才能挂 layer-shell 属性
+            setupLayerShell();
+        } else {
+            // X11 / XWayland 回退：override-redirect => 不被 WM 管理、可自行定位。
+            // 同时显式拒绝焦点/激活：否则 show() 或映射时 X 服务器会把焦点切过来。
+            setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint
+                           | Qt::X11BypassWindowManagerHint);
+            setAttribute(Qt::WA_TranslucentBackground);
+            setAttribute(Qt::WA_ShowWithoutActivating);
+            setAttribute(Qt::WA_X11DoNotAcceptFocus);
+            setFocusPolicy(Qt::NoFocus);
+            setCursor(Qt::ArrowCursor);
+            // 自定位：默认贴屏幕右上（右缘 20px、顶部 50px）
+            placeAtDefaultPosition();
+        }
 #endif
-        setAttribute(Qt::WA_TranslucentBackground);
-        // 自定位：默认贴屏幕右上（右缘 20px、顶部 50px），不再依赖外部 xdotool
-        placeAtDefaultPosition();
         // 每秒更新（秒针每秒动）
         QTimer* timer = new QTimer(this);
         connect(timer, &QTimer::timeout, this, [this]() { update(); });
@@ -189,7 +214,7 @@ protected:
         if (e->button() == Qt::LeftButton) {
             hideFor(10 * 1000);
         } else if (e->button() == Qt::RightButton) {
-            showHideMenu(e->globalPos());
+            showHideMenu(e->globalPosition().toPoint());
         }
         e->accept();
     }
@@ -239,7 +264,28 @@ protected:
     }
 
 private:
-    // 贴屏幕右上：右缘留 POS_RIGHT_MARGIN、顶部留 POS_TOP
+    // 原生 Wayland：把本窗口挂到 wlr-layer-shell（overlay 层、右上角）。
+    // 只影响这一个窗口——layer-shell 集成是按窗口挂载的，不能全局设置
+    // QT_WAYLAND_SHELL_INTEGRATION，否则设置对话框也会变成 layer surface。
+    void setupLayerShell() {
+#if defined(Q_OS_LINUX) && defined(ABC_HAVE_LAYER_SHELL)
+        QWindow* wh = windowHandle();
+        if (!wh) return;
+        LayerShellQt::Window* ls = LayerShellQt::Window::get(wh);
+        if (!ls) return;
+        ls->setLayer(LayerShellQt::Window::LayerOverlay);
+        LayerShellQt::Window::Anchors anchors(LayerShellQt::Window::AnchorTop);
+        anchors |= LayerShellQt::Window::AnchorRight;
+        ls->setAnchors(anchors);
+        ls->setMargins(QMargins(0, POS_TOP, POS_RIGHT_MARGIN, 0));
+        ls->setExclusiveZone(-1);   // 不挤占其它窗口的可用区
+        ls->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityNone);
+        ls->setActivateOnShow(false);
+        ls->setScope(QStringLiteral("abcclock"));
+#endif
+    }
+
+    // X11 回退定位：贴屏幕右上（右缘留 POS_RIGHT_MARGIN、顶部留 POS_TOP）
     void placeAtDefaultPosition() {
         if (QScreen* scr = QGuiApplication::primaryScreen()) {
             const QRect g = scr->geometry();
@@ -985,34 +1031,53 @@ static bool xDisplayReachable() {
     return !display.isEmpty() && xDisplayConnectable(display);
 }
 
-// Wayland 会话：本程序依赖 override-redirect 固定悬浮，需走 XWayland。
-// 有些启动器（或无图形 shell / SSH）不导出 DISPLAY，此时回落 Xwayland 常用的 :1。
-// 返回 false 表示按自动选择走不通（用户显式指定 QT_QPA_PLATFORM 时不干预，一律 true）。
-static bool prepareX11Display() {
+// Wayland socket 是否真的存在（WAYLAND_DISPLAY 可能是绝对路径）
+static bool waylandDisplayReachable() {
+    QString path = qEnvironmentVariable("WAYLAND_DISPLAY");
+    if (path.isEmpty())
+        return false;
+    if (!path.startsWith(QLatin1Char('/'))) {
+        const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
+        if (runtime.isEmpty())
+            return false;
+        path = runtime + QLatin1Char('/') + path;
+    }
+    return QFileInfo::exists(path);
+}
+
+// 平台选择：优先原生 Wayland + layer-shell（协议层保证不抢键盘焦点）；
+// 编译时没有 layer-shell 支持、或没有 Wayland 会话时回退 X11/XWayland。
+// 用户显式设置 QT_QPA_PLATFORM 时不干预。
+static bool preparePlatform() {
     if (!qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
         return true;
+#if defined(ABC_HAVE_LAYER_SHELL)
+    if (waylandDisplayReachable()) {
+        qputenv("QT_QPA_PLATFORM", "wayland");
+        return true;
+    }
+#endif
     if (qEnvironmentVariableIsEmpty("DISPLAY")
         && !qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY")
         && xDisplayConnectable(":1"))
         qputenv("DISPLAY", ":1");
     if (!xDisplayReachable())
         return false;
-    if (!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))
-        qputenv("QT_QPA_PLATFORM", "xcb");
+    qputenv("QT_QPA_PLATFORM", "xcb");
     return true;
 }
 #endif
 
 int main(int argc, char* argv[]) {
 #if defined(Q_OS_LINUX)
-    // 没有可用 X 时 Qt 的 xcb 插件会直接 abort（SIGABRT，几乎不打印原因），
-    // 这里提前试连一次并给出可读提示、返回非零码。
-    if (!prepareX11Display()) {
+    // 没有可用 Wayland/X 时 Qt 的插件会直接 abort（SIGABRT，几乎不打印原因），
+    // 这里提前判断并给出可读提示、返回非零码。
+    if (!preparePlatform()) {
         std::fprintf(stderr,
-                     "abcclock: 无法启动：DISPLAY=\"%s\" 连不上（WAYLAND_DISPLAY=\"%s\"）。\n"
-                     "本程序是 X11 悬浮时钟：Wayland 会话需要 Xwayland（通常 DISPLAY=:1，"
-                     "必要时设置 XAUTHORITY），或显式导出 QT_QPA_PLATFORM 指定平台。\n",
-                     qgetenv("DISPLAY").constData(), qgetenv("WAYLAND_DISPLAY").constData());
+                     "abcclock: 无法启动：WAYLAND_DISPLAY=\"%s\" 与 DISPLAY=\"%s\" 均不可用。\n"
+                     "Wayland 会话需要 wlr-layer-shell（sway 等 wlroots 合成器）和 layer-shell-qt；"
+                     "X11 回退需要 Xwayland（通常 DISPLAY=:1），或显式导出 QT_QPA_PLATFORM 指定平台。\n",
+                     qgetenv("WAYLAND_DISPLAY").constData(), qgetenv("DISPLAY").constData());
         return 1;
     }
     // 托盘总线自愈（必须在 QApplication 之前设置环境变量）

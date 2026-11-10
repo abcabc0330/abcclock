@@ -1,6 +1,6 @@
 # abcclock
 
-一个 200px 宽的桌面悬浮时钟（Qt5 / X11），设计为始终显示在终端窗口上方：
+一个 200px 宽的桌面悬浮时钟（Qt6；Wayland 原生 layer-shell，X11 自动回退），设计为始终显示在终端窗口上方：
 圆角半透明灰底、模拟表盘、星期、日期、三个城市的时区时间，以及三条天气信息。
 
 
@@ -18,7 +18,10 @@
   - 左键点击窗口任意区域：立即隐藏，10 秒后自动显示
   - 右键点击窗口：弹出菜单，可选 `隐藏 10 秒` / `隐藏 1 分钟` / `隐藏 10 分钟` / `隐藏 30 分钟`
   - 托盘「显示」会取消待执行的自动显示计时；托盘「隐藏」不设定自动显示
-- 窗口使用 `override_redirect`，全屏终端（如 ghostty）也不会遮住它
+- **不抢键盘焦点**：Wayland 下是 `wlr-layer-shell` 的 overlay surface
+  （`keyboard-interactivity=none`、`activateOnShow=false`），协议层就不可能获得
+  键盘焦点；X11/XWayland 回退使用 override-redirect + `WA_ShowWithoutActivating`
+- 浮在所有平铺/全屏窗口之上（overlay 层，sway 全屏时也不被遮挡）
 - **系统托盘**（StatusNotifierItem）：
   - 左键单击图标：显示 / 隐藏窗口（图标隐藏时变暗）
   - 右键菜单：`隐藏`（或 `显示`）/ `设置…` / `开机运行（已开启/已关闭）`（复选框）/ `退出`
@@ -52,17 +55,17 @@
 
 ## 构建
 
-依赖：Qt5 开发包 + libdbus-1 头文件（`dbus-1` 的 pkg-config）+ C++17 编译器。
-不需要额外链接 X11/XCB，也不需要 `xdotool`。
+依赖：Qt6（Widgets/DBus）+ libdbus-1 头文件（`dbus-1` 的 pkg-config）+ C++17 编译器。
+Wayland 原生模式还需要 LayerShellQt（`layer-shell-qt`）的头文件与库；编译时检测不到
+就自动回退 X11/XWayland，不会导致构建失败。
 
 | 发行版 | 依赖 |
 |---|---|
-| Arch | `qt5-base` `dbus` `libxcb` `pkgconf` `make` |
-| Debian/Ubuntu | `qtbase5-dev` `qt5-qmake` `libdbus-1-dev` `pkg-config` `build-essential` |
+| Arch | `qt6-base` `qt6-wayland` `dbus` `libxcb` `layer-shell-qt` `pkgconf` `make` |
+| Debian/Ubuntu | `qt6-base-dev` `qt6-wayland-dev` `libdbus-1-dev` `libxcb1-dev` `pkg-config` `build-essential`（可选 `liblayershellqtinterface-dev`） |
 
 ```bash
-qmake-qt5 abcclock.pro && make -j$(nproc)   # Arch
-qmake abcclock.pro && make -j$(nproc)       # Debian/Ubuntu（或 QT_SELECT=qt5 qmake）
+qmake6 abcclock.pro && make -j$(nproc)
 ```
 
 产物为 `abcclock`。运行：
@@ -71,24 +74,37 @@ qmake abcclock.pro && make -j$(nproc)       # Debian/Ubuntu（或 QT_SELECT=qt5 
 ./abcclock 北京
 ```
 
-### 窗口定位（X11 / XWayland）
+### 窗口定位
 
-程序**自行定位**，不依赖窗口管理器或任何外部工具：
+程序**自行定位**，不依赖窗口管理器或任何外部工具。
+
+Wayland（wlroots 系合成器，如 sway）优先：
+
+- 窗口是 `zwlr_layer_surface_v1`（LayerShellQt 按窗口挂载），layer = `overlay`，
+  anchor = `top | right`，margin = `top=50, right=20`，由合成器贴右上角摆放
+  （1920 宽屏幕 → 窗口右缘 1900）；
+- `exclusive_zone = -1`：不挤占其它窗口的可用区；
+- `keyboard_interactivity = none` + `activateOnShow = false`：弹出、重显示、
+  点击都不会请求键盘焦点，正在输入的程序光标不动；
+- 设置对话框是普通 `xdg_toplevel`（layer-shell 只挂主窗口），获得焦点可正常输入。
+
+X11 / XWayland 回退：
 
 - 窗口标志为 `FramelessWindowHint | WindowStaysOnTopHint | X11BypassWindowManagerHint`，
   即 override-redirect，WM 不会接管，全屏终端也盖不住；
-- 启动时按 `POS_RIGHT_MARGIN`(20px) / `POS_TOP`(50px) 贴主屏右上角摆放
-  （1920 宽屏幕 → x=1700、右缘 1900）；
-- 启动时先用 `xcb_connect` 试连一次当前 `DISPLAY`；连不上且未显式指定
-  `QT_QPA_PLATFORM` 时，直接在 stderr 说明原因并返回 1（Qt 自己遇到这种情况会
-  `SIGABRT`，不打印原因）；
-- Wayland 会话下若启动器没导出 `DISPLAY`（桌面项、无图形 shell、SSH 常见），
-  自动试连 Xwayland 常用的 `:1`，成功则补上 `DISPLAY` 并切到 `QT_QPA_PLATFORM=xcb`；
-  显式指定 `QT_QPA_PLATFORM`（如 `wayland`）时不干预。
+- `WA_ShowWithoutActivating` + `WA_X11DoNotAcceptFocus` + `NoFocus`，映射时不抢焦点；
+- 启动时按 `POS_RIGHT_MARGIN`(20px) / `POS_TOP`(50px) 贴主屏右上角摆放。
+
+平台选择规则：
+
+- 显式设置 `QT_QPA_PLATFORM` 时不干预；
+- 编译时带 layer-shell 支持且 `WAYLAND_DISPLAY` 的 socket 存在 → 原生 Wayland；
+- 否则用 `xcb_connect` 试连当前 `DISPLAY`；连不上先试 Xwayland 常用的 `:1`，
+  再失败则在 stderr 说明原因并返回 1（Qt 自己遇到这种情况会 `SIGABRT`，不打印原因）。
 
 ## macOS（Apple Silicon / Intel）
 
-同一份源码，Qt6 分支：窗口用 `Tool` + `NSFloatingWindowLevel`（不进 Dock、跨 Space 悬浮），
+同一份源码（Qt6）：窗口用 `Tool` + `NSFloatingWindowLevel`（不进 Dock、跨 Space 悬浮），
 自启动改用 `~/Library/LaunchAgents/com.abcabc0330.abcclock.plist`（菜单里的「开机运行」会自动写/删它），
 Linux 专用的 D-Bus 托盘探测在 macOS 编译时整段剔除。
 
@@ -120,11 +136,11 @@ make install DESTDIR=/tmp/abcclock-pkg   # 或直接 make && sudo make install
 
 ```bash
 sudo apt build-dep .            # 或手动安装控制文件中 Build-Depends 各项
-dpkg-buildpackage -us -uc -b    # 产物在上一级目录：abcclock_1.5.0-1_amd64.deb
+dpkg-buildpackage -us -uc -b    # 产物在上一级目录：abcclock_3.0.0-1_amd64.deb
 sudo apt install ../abcclock_*.deb
 ```
 
-运行时依赖自动生成（`libqt5widgets5`/`libqt5gui5`/`libqt5dbus5`/`libdbus-1-3` 等），
+运行时依赖自动生成（`libqt6widgets6`/`libqt6gui6`/`libqt6dbus6`/`libdbus-1-3` 等），
 另显式依赖 `curl`（天气查询）。
 
 ## 布局

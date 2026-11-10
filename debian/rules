@@ -4,7 +4,7 @@
 	dh $@
 
 override_dh_auto_configure:
-	QT_SELECT=qt5 qmake abcclock.pro PREFIX=/usr
+	qmake6 abcclock.pro PREFIX=/usr
 
 override_dh_auto_clean:
 	-test ! -f Makefile || $(MAKE) distclean
