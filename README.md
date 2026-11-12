@@ -93,7 +93,7 @@ X11 / XWayland 回退：
 - 窗口标志为 `FramelessWindowHint | WindowStaysOnTopHint | X11BypassWindowManagerHint`，
   即 override-redirect，WM 不会接管，全屏终端也盖不住；
 - `WA_ShowWithoutActivating` + `WA_X11DoNotAcceptFocus` + `NoFocus`，映射时不抢焦点；
-- 启动时按 `POS_RIGHT_MARGIN`(20px) / `POS_TOP`(50px) 贴主屏右上角摆放。
+- 启动时按 `POS_RIGHT_MARGIN`(20px) / `POS_TOP`(100px) 贴主屏右上角摆放。
 
 平台选择规则：
 
@@ -136,7 +136,7 @@ make install DESTDIR=/tmp/abcclock-pkg   # 或直接 make && sudo make install
 
 ```bash
 sudo apt build-dep .            # 或手动安装控制文件中 Build-Depends 各项
-dpkg-buildpackage -us -uc -b    # 产物在上一级目录：abcclock_3.0.0-1_amd64.deb
+dpkg-buildpackage -us -uc -b    # 产物在上一级目录：abcclock_3.1.0-1_amd64.deb
 sudo apt install ../abcclock_*.deb
 ```
 

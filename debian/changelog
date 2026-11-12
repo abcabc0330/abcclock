@@ -1,3 +1,11 @@
+abcclock (3.1.0-1) unstable; urgency=medium
+
+  * 顶部留白加倍：POS_TOP 由 50px 调整为 100px，Wayland layer-shell 的
+    top margin 与 X11/XWayland 回退定位共用同一常量，两个后端与 macOS
+    同时生效；右缘 POS_RIGHT_MARGIN 保持 20px 不变。
+
+ -- ddfabc <liqiang0330@gmail.com>  Thu, 12 Nov 2026 02:50:00 +0800
+
 abcclock (3.0.0-1) unstable; urgency=medium
 
   * 根除「自动弹出后抢光标」：Linux 上改为原生 Wayland wlr-layer-shell

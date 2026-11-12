@@ -76,7 +76,7 @@ static const int WEATHER_N = 3;         // 3 个城市天气
 static const int PAD_H     = 4;                     // 左右各留 4px 背景边（整体宽 +8）
 static const int WIN_W     = DIAL_SIZE + PAD_H * 2;  // 总宽 200 = 表盘宽 192 + 左右各 4
 static const int POS_RIGHT_MARGIN = 20;              // 默认距屏幕右缘
-static const int POS_TOP          = 50;              // 默认距屏幕顶
+static const int POS_TOP          = 100;             // 默认距屏幕顶（2026-11-12 需求：由 50 加倍）
 static const int WIN_H     = DIAL_SIZE + WEEKDAY_H + DATE_H + TIME_H + WEATHER_H * WEATHER_N;
 static const int CORNER_R   = 12;       // 整窗圆角半径
 
